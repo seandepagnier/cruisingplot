@@ -5,6 +5,9 @@
 ;; License as published by the Free Software Foundation; either
 ;; version 3 of the License, or (at your option) any later version.
 
+; define our own scheduler so we can process concurrent events,
+; but get reliable timing, implemented using call/cc
+
 (declare (unit task))
 (declare (uses srfi-1 srfi-18 utilities))
 
@@ -48,7 +51,7 @@
 ; Run the thunk as a task, when it returns the task exits
 (define (create-task info thunk)
   (create-periodic-task info 0
-                        (lambda () thunk
+                        (lambda () (thunk)
                                 (task-exit))))
 
 ; could be replaced with a heap if there were many tasks
@@ -86,7 +89,6 @@
            (set! last-total-run-time total-run-time)
            (set! total-run-time 0)
            (set! total-sleep-time 0)
-
              )))))
 
     (lambda ()
@@ -96,7 +98,6 @@
         (let ((task (first tasks)))
           (cond ((< (task-sleep-until task) (timer))
                  (set! current-task task)
-                 
                  (let ((ret (call/cc (lambda (cont)
                                        (set! current-task-cont cont)
                                        (set! task-time (timer))

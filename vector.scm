@@ -8,6 +8,8 @@
 ; Not scheme vectors, these are used in calculations for movement
 ; a "course" is the polar version with heading and speed
 
+(declare (unit vector))
+
 (define (vector-magnitude^2 vec)
   (apply + (map square vec)))
 

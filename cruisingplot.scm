@@ -11,7 +11,7 @@
 
 (use srfi-1 srfi-4 posix srfi-18 srfi-12 srfi-13 srfi-69 glut args)
 
-(declare (uses net plot gps weather wind magnetometer computation utilities leastsquares ahrs config relay tiltcompensation wifiaimer filter task))
+(declare (uses net plot gps weather wind magnetometer computation utilities leastsquares ahrs config relay tiltcompensation wifiaimer filter task autopilot motor))
 
 (define (setup) (lambda () #t))
 

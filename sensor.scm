@@ -173,13 +173,13 @@
                        (set! cur ""))
                       (else (set! cur (string-append cur (string c)))))))))))))
 
-
-(define (make-line-reader port-proc proc)
-  (create-periodic-task .05
+(define (make-line-reader port proc)
+  (create-periodic-task
+   (string-append "line reader for " (port->string port)) .05
    (lambda ()
      (let loop ()
-       (if (char-ready? (port-proc))
-           (let ((l (read-line (port-proc))))
+       (if (char-ready? port)
+           (let ((l (read-line port)))
              (proc l)
              (loop)))))))
 

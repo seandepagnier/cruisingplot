@@ -254,10 +254,10 @@
         (let each-step ((time start-time)
                         (history history))
           (let ((next-history (cdr history)))
-            (cond ((or (null? next-history) (< time end-time)) '())
-                  ((< time (caar next-history)) (each-step time next-history))
+            (cond ((or (null? next-history) (> time end-time)) '())
+                  ((> time (caar next-history)) (each-step time next-history))
                   (else (cons (linear-interpolate time (car history) (car next-history))
-                              (each-step (- time time-step) history)))))))))
+                              (each-step (+ time time-step) history)))))))))
 
 (define (history-frequency-amplitude-phase history)
   (let ((max-frequency 20))
@@ -311,5 +311,3 @@
     (if (> time stop-time) '()
         (cons `(,time ,(+ (* amplitude (sin (+ (* 2 Pi (/ time period)) phase))) bias))
               (each-time (+ time time-step))))))
-
-;(define (compute-tilt-fourier-transform)

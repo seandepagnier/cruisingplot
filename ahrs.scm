@@ -27,7 +27,7 @@
                     (init (+ index 1)))))
         
            (make-line-reader
-            (lambda () i)
+            i
             (lambda (line)
               (let ((values (string-split line ",")))
                 (cond ((< (length values) 2) #t) ; startup lines (no comma) and empty ok
@@ -161,7 +161,6 @@
 (define quad-residual
   (string-infix->prefix "b * h * Z - d * h * Y + e * g * Y + a * d * h * X - b * c * h * X - a * e * g * X + b * e * f * X - b * e * W + By * d * h - a * Bx * d * h + b * Bx * c * h - b * Bz * h - By * e * g + a * Bx * e * g - b * Bx * e * f + b * Bw * e"))
 
-
 (define (build-quad-jacobian-residual-row state measurements)
   (let ((env (scheme-report-environment 5)))
     (for-each (lambda (symbol value)
@@ -181,7 +180,6 @@
     (verbose "d: " d)
     (< d 1e-1)))
 
-
 (define (quad-least-squares)
   (least-squares-iterate (matrix-transpose (matrix '((0 1 -1 1 1 1 1 1 0 0 0 0))))
                          build-quad-jacobian-residual-row quad-complete? 10))
@@ -192,5 +190,3 @@
                       '(accelerometer)
                       (lambda ()
                         (magnitude (sensor-query 'accelerometer))))
-
-;(computation-register 'pitch

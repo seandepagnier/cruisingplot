@@ -156,10 +156,14 @@
                   
 (define (matrix-inverse m)
   (if (not (matrix-square? m)) (error "cannot perform inverse on non-square matrix" m))
-  (let-values (((A pivot) (atlas-lapack:dgetrf blas:RowMajor (matrix-rows m)
-                                               (matrix-cols m) (matrix-vector m))))
-    (vector->matrix (matrix-rows m) (matrix-cols m)
-                        (atlas-lapack:dgetri blas:RowMajor (matrix-rows m) A pivot))))
+  (call/cc (lambda (cont)
+             (with-exception-handler
+              (lambda _ (cont #f))
+              (lambda ()
+              (let-values (((A pivot) (atlas-lapack:dgetrf blas:RowMajor (matrix-rows m)
+                                                           (matrix-cols m) (matrix-vector m))))
+                (vector->matrix (matrix-rows m) (matrix-cols m)
+                                (atlas-lapack:dgetri blas:RowMajor (matrix-rows m) A pivot))))))))
 
 ; use cholesky decomposition on matrix A returns L
 ; A = LL'

@@ -24,6 +24,8 @@
  (list
   (args:make-option (a ahrs) (optional: "OPTIONS") "Create an ahrs which runs kalman filter algorithms.  Invoke -a help for more information."
                     (make-ahrs-from-string arg))
+  (args:make-option (A autopilot) (optional: "OPTIONS") "Create an autopilot"
+                    (create-autopilot arg))
   (args:make-option (C config) (required: "FILENAME") "include a config file which contentss specifies command line options"
                     (with-input-from-file arg
                       (lambda ()

@@ -35,7 +35,7 @@
          ,(make-number-verifier 'heading "heading to hold" 0 -180 180)
          ,(make-number-verifier 'beamwidth "tolerated heading mismatch" 8 0 180)
          ,(make-state-verifier))
-       "-wifiaimer wifidevice=wlan0,motordevice=/dev/ttyS0,serialbaud=9600"
+       "-wifiaimer wifidevice=wlan0"
       (create-motor-options)))
 
     (define mag-calibration (matrix-transpose (matrix '((5551
@@ -102,7 +102,6 @@
                    (mag-y (sensor-query '(magnetometer 1))))
                (verbose "Wifiaimer associated: " associated)
                (very-verbose "maglog " mag-log)
-
                                         ; statistics
                (cond ((>= (statistics-timer) 60)
                       (print "\nwifiaimerstats: movement "
@@ -187,17 +186,12 @@
                             (if (> (abs antenna-misalignment) (options 'beamwidth))
                                 (let ((command
                                        (track-speed-calculate antenna-misalignment)))
-                                  (motor-command command)
-                                  ))))
-
+                                  (motor-command command)))))
                                         ; did we wrap?  record it
                         (cond ((and (> antenna-heading 90) (< last-antenna-heading -90))
                                (set! antenna-heading-wraps (+ antenna-heading-wraps 1)))
                               ((and (< antenna-heading -90) (> last-antenna-heading 90))
                                (set! antenna-heading-wraps (- antenna-heading-wraps 1))))
-
                         (set! last-antenna-heading antenna-heading)))
                   )))))
-         
-
-         'wifi-aimer))))
+       'wifi-aimer))))

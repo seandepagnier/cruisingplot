@@ -6,7 +6,14 @@
 ;; version 3 of the License, or (at your option) any later version.
 
 (declare (unit utilities))
-(declare (uses plot))
+(declare (uses plot srfi-18))
+
+(use srfi-18)
+
+(define (number-in-bounds x min max)
+  (cond ((< x min) min)
+        ((> x max) max)
+        (else x)))
 
 (define (sequence from to . step)
   (if (> from to) '() (cons from (apply sequence (+ from (if (null? step) 1 (car step))) to step))))
@@ -77,7 +84,7 @@
                 (lambda _ (handler) (apply old-handler _)))))
 
 (define (port->string port)
-  (with-output-to-string (lambda () (write (port)))))
+  (with-output-to-string (lambda () (write port))))
 
 (define (debug arg)        
   (create-periodic-task

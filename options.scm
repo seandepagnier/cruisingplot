@@ -35,7 +35,7 @@
 
 (define (make-discrete-verifier name help default validvalues)
   (make-verifier
-   name (apply string-append help " Values: " (map symbol->string validvalues))
+   name (apply string-append help " Values: " (map ->string validvalues))
    default
    (lambda (value)
      (if (member value validvalues)

@@ -11,20 +11,113 @@
 
 (declare (unit motor))
 
-(define (motor-options)
-  `(,(make-string-verifier "serial device of motor" 'motordevice "/dev/ttyUSB0")
-    ,(make-baud-verifier "serial baud rate to use" 'serialbaud 19200)))
+(define (create-motor-options)
+  (create-options
+   `(,(make-string-verifier 'motordevice "serial device of motor" "/dev/ttyUSB0")
+     ,(make-baud-verifier 'serialbaud "serial baud rate to use" 9600)
+     ,(make-number-verifier 'min-motor-duty "minimum duty cycle" .3 0 1)
+     ,(make-number-verifier 'max-motor-duty "maximum duty cycle" 1 0 1)
+     )
+  "no examples" #f))
 
 (define (motor-open motor-options)
   (let-values (((motor-input motor-output)
                 (open-serial-device (motor-options 'motordevice) (motor-options 'serialbaud))))
-    (list motor-input motor-output motor-options)))
+    (let ((motor (list motor-input motor-output motor-options 'stopped default-motor-calibration)))
+      (motor-command motor 0) ; stop motor and flush buffer
+      (make-line-reader motor-input
+                        (lambda (line)
+                          (cond ((eof-object? line)
+                                 (print "motor device closed unexpectedly")
+                                 (task-sleep 1)
+                                 (let ((new-motor (motor-open motor-options)))
+                                   (set-car! motor (car new-motor))
+                                   (set-cdr! motor (cdr new-motor))
+                                   (task-exit)))
+                                ((string= "o" line) (print "overflow in motor buffer"))
+                                ((string= "f" line) (print "overflow in duty cycle"))
+                                ((string= "u" line) (print "underflow in duty cycle"))
+                                ((string= "k" line) 'ok)
+                                ((string= "i" line) (error "invalid command to motor"))
+                                ((string= "e" line)
+                                 (motor-set-state! motor 'stopped))
+                                (else
+                                 (print "got from motor unhandled message: " line)))))
+      motor)))
 
 (define motor-input first)
 (define motor-output second)
 (define motor-options third)
+(define motor-state fourth)
+(define motor-calibration fifth)
 
-(define (motor-command motor command)
-  (verbose "motor at " ((motor-options motor) 'motor-device) " command: " command)
-  (write (inexact->exact (round command)) motor)
-  (newline motor))
+(define default-motor-calibration '(-0.0 7.8824 0.8861 21.49))
+
+(define (motor-apply-calibration calibration velocity)
+  (+ (first calibration)
+     (* (second calibration) velocity)
+     (* (third calibration) (square velocity))
+     (* (fourth calibration) (cube velocity))))
+
+(define (motor-set-state! motor state)
+  (set-car! (cdddr motor) state))
+
+; state can be:
+; 'moving - moving at last command
+; 'stopped - reached the end
+
+; command motor to turn at a given rate (or duty cycle)
+(define (motor-command motor duty)
+  (print "motor at " ((motor-options motor) 'motordevice) " duty: " duty)
+  (write (inexact->exact (round (* 100 duty))) (motor-output motor))
+  (newline (motor-output motor))
+  (flush-output (motor-output motor))
+  (motor-set-state! motor (if (zero? duty) 'stopped 'moving)))
+
+
+; calibrated motor can be commanded in velocity
+(define (motor-command-velocity motor velocity)
+  (motor-command motor
+                 (let ((calduty (motor-apply-calibration (motor-calibration motor) velocity))
+                       (minduty ((motor-options motor) 'min-motor-duty))
+                       (maxduty ((motor-options motor) 'max-motor-duty)))
+                   (cond ((> (abs calduty) maxduty) (* (/ calduty (abs calduty)) maxduty))
+                         ((< (abs calduty) minduty) 0)
+                         (else calduty)))))
+
+
+; run motor at various speeds to full stops
+; alternating direction to build a lookup table
+; to calibrate out linearities.
+; 
+; distance / time = velocity
+; normalized distance of 1
+; velocity = 1 / time
+; duty * cal[duty] = velocity
+
+(define (calibrate-motor motor)
+  (let ((raw-points
+         (let ((duty-width (- ((motor-options motor) 'max-motor-duty)
+                              ((motor-options motor) 'min-motor-duty)))
+               (count 4))
+           (let each-speed ((index -1) (sign -1))
+             (cond ((< index count)
+                    (let ((timer (start-timer)))
+                      (let ((duty (if (negative? index) sign
+                                      (* sign (+ ((motor-options motor) 'min-motor-duty)
+                                             (* index (/ duty-width (- count 1))))))))
+                      (motor-command motor duty)
+                      (print "waiting until end for duty " duty)
+                      (let wait-for-it ()
+                        (cond ((eq? (motor-state motor) 'moving)
+                               (task-sleep .01)
+                               (wait-for-it))
+                              (else
+                               (cons (list (/ sign (timer)) duty)
+                                     (each-speed (+ index (if (negative? sign) 1 0)) (- sign)))))))))
+                   (else '()))))))
+
+    ; remove first point (getting in position negative index) and add zero point
+    (let ((points (cons '(0 0) (cdr raw-points))))
+      (print "points " points)
+      (polynomial-regression points 5))))

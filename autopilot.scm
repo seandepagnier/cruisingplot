@@ -9,94 +9,76 @@
 
 ;  The goal is to keep the boat on course by measuring it's motion,
 ;  then estimating what the motion will be in the future with various
-;  helm changes.  The basic forces involved:
-;
-;  Water Helm from Keel and Rudder pushing water
-;  waterhelm(waterspeed, waterdirection, rudderposition) =
-;        waterspeed*rudderconstant*rudderposition - keelconstant*heading'
-;
-;  Weather Helm from sails pushing against air
-;                  + weatherhelm(windspeed, winddirection)  + current/bias
-;
-;  the forces turning the boat are the total of 
-;  heading'' = waterhelm + weatherhelm
-;
-;; We can predict the heading for sailboats with integration of the forces
-;; turning the boat:
-;
-;  heading(t+1) = heading(t) + heading'(t)*t
-;  heading'(t+1) = heading'(t) + heading''(t)*t
-;
-;  the yawmoment is the inertia of yawing the vessel, to be predicte
-;
-;  we will try a simple quadratic and estimate weatherhelm
-;  when sail trim, wind speed, or direction change, these values change
-;  weatherhelm(windspeed, winddirection) = a*windspeed^2 + b*winddirection + c
-;
-;  the rudder constant varies from vessel to vessel
-;  rudderhelm(headingrate, rudderposition, waterspeed) = rudderconstant*waterspeed*rudderposition
-;       could add optional term:  kappa*rudderspeed to account for lateral water movement from helm change
-;
-;  since we only command the rudderspeed on or off, we can integrate to get position
-;  the position can saturate, so we can apply that as well
-;  rudderposition = rudderspeed*time, saturate(rudderposition, +maxrudder, -maxrudder)
-;
-; to command autopilot, simply calculate the predicted heading at T in the future
-; where T is the minimum autopilot movement with rudder speed set to +- and 0, and determine
-; which result has the closest heading to the desired heading and is not yawing.
-
-; to determine which move to make, apply critical to underdampening depending
-; on how hard we want to work the autopilot
+;  helm changes.
 
 
-;  m*f''(x) + c*f'(x) + k*x = 0
-
-
-; for roll pitch and heave we can model like a pendulum:
-; M(t) - Mx = Ia
+; h'' + 2 c w h' + w^2 h = 0
 ;
-; where M(t) is the external healing moment,  Mx is the resisting moment (bouancy and ballast)
-; I is the moment of intertia, and a is the angulat acceleration
-
+;              2
+;     - h'' - w h
+; c = -----------
+;        2 w h'
 ;
+; w = 1 / period
+; 
+; for critical dampening, c = 1
+(define (calculate-dampening-factor heading heading-rate heading-rate-rate period)
+  (let ((w (/ period)))
+    (/ (+ (- heading-rate-rate) (- (* (square w) heading)))  (* 2 w heading-rate))))
+;
+; command autopilot based on h''
+;
+; cmd = -gain(2 c w h' + w^2 h)
+(define (calculate-filter-cmd heading-error heading-rate period damping-factor gain)
+  (let ((w (/ period))
+        (c damping-factor))
+    (- (* gain (+ (* 2 c w heading-rate) (* (square w) heading-error))))))
+         
 
 (define (create-autopilot arg)
   (define options
     (create-options
-     (append `(,(make-number-verifier 'gain "gain in feedback" 1 0 10)
-               ,(make-number-verifier 'gain "max turn speed (deg/s)" 10 0 100)
-               ,(make-discrete-verifier 'filter "what autopilot to use" 'basic '(basic derivative))
-               ,(make-sensor-indicies-verifier "index of which ahrs to use" 'ahrs 'ahrs)
-               ,(make-number-verifier 'update-rate "how often to command motor in hz" 2 .1 100))
-               ,(make-number-verifier 'wind-angle "apparent wind angle to hold" 0 -180 180))
-             (motor-options)))
+     `(,(make-number-verifier 'period "how fast to reach course in seconds" 3 1 10)
+       ,(make-number-verifier 'heading-error-tolerance "acceptable heading error in degrees" 5 1 10)
+       ,(make-number-verifier 'heading "compass heading to hold" 0 0 360)
+       ,(make-number-verifier 'damping-factor "damping factor, 1 for critical" 1 0 10)
+       ,(make-number-verifier 'wind-angle "apparent wind angle to hold" 0 -180 180))
+     "-autopilot heading=90"
+     (create-motor-options)))
 
-  (start-periodic-task
-   (/ (options 'update-rate))
-   (case (options 'filter)
-     ((basic) (autopilot-basic options))
-     ((derivative (autopilot-derivative options)))
-     (else (error "unrecognized autopilot filter: " (options 'filter))))))
+(parse-basic-options-string options arg)
+  (define gain .1)
+  (define motor (motor-open options))
 
- 
+  (define heading-rate 0)
+  (define heading-rate-rate 0)
 
+;(create-task "motor cal task" (lambda () (calibrate-motor motor)))
 
-;; basic autopilot feedback loop
-;  error = wind direction - desired wind direction
-; command = error * gain / rate
-(define (basic-autopilot options)
-  (let ((error (- (computation-calculate 'wind-direction) (options 'wind-angle))))
-    (motor-command (/ (* error (options 'gain)) (options 'update-rate)))))
+  (create-periodic-task
+   "autopilot" 1
+   (lambda ()
+     (let*((he (- (computation-calculate 'heading) (options 'heading)))
+           (hr (- he heading-error)))
+       (set! heading-rate-rate (- hr heading-rate))
+       (set! heading-rate hr)
+       (set! heading-error he)
 
-;; derivative autopilot uses the rate of change of heading (gyro) to do a better
-; job of heading correction
-(define (derivative-autopilot options)
-  (let ((error (- (computation-calculate 'wind-direction) (options 'wind-angle)))
-        (ahrs (computation-calculate 'ahrs)))
-    (let ((yaw-rate (type-field-get 'ahrs 'yawrate ahrs))
-          (desired-yaw-rate (saturate (* (options 'gain) error)
-                                      (- (options 'max-turn-rate)) (options 'max-turn-rate))))
-          (let ((rate-error (- yaw-rate desired-yaw-rate)))
-            (motor-command (/ (+ (* rate-error motor-constant))
-                              (/ (options 'update-rate))))))))
+       (print "heading-error " heading-error
+              " heading-rate " heading-rate
+              " heading-rate-rate " heading-rate-rate)
 
+       ; update gain to reach critical dampening
+       (let ((df (calculate-dampening-factor heading-error heading-rate heading-rate-rate (options 'period)))
+             (lp .1))
+         (let ((new-gain (+ (/ lp df) (* (- 1 lp) gain))))
+           (print "gain " gain " new-gain " new-gain " df " df)
+           (set! gain new-gain)))
+
+       (motor-command-velocity motor
+                      (let ((fc (calculate-filter-command heading-error heading-rate
+                                           (options 'period) (options 'damping-factor) gain)))
+                        (let ((mc (number-in-bounds fc (- max-motor-cmd) max-motor-cmd)))
+                          (if (and (> (abs heading-error) (options 'heading-error-tolerance))
+                                   (> mc (options 'min-motor-cmd)))
+                              mc 0))))))))

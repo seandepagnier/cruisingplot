@@ -29,7 +29,8 @@ extern void libgps_read(struct gps_data_t *data, double results[6]);
 (define DEFAULT_GPSD_PORT	"2947")
 (define WATCH_ENABLE   1)
 
-(type-register 'gps '(time latitude longitude altitude heading speed))
+(type-register 'gps '(time latitude longitude altitude heading speed
+                           heading-from-position speed-from-position))
 
 (define (register-gps-computations)
   (computation-register-first-alias 'gps '(gps))
@@ -52,6 +53,15 @@ extern void libgps_read(struct gps_data_t *data, double results[6]);
   (computation-register 'gps-time "gps timestamp" '(gps)
                         (lambda () (sensor-field-get 'gps 'time))))
 
+
+(define (gps-heading-speed-from-position fix0 fix1)
+  (let ((dt (- (type-field-get 'gps 'time fix1)
+               (type-field-get 'gps 'time fix0))))
+    (let ((lat1 (type-field-get 'gps 'latitude fix1))
+          (lon1 (type-field-get 'gps 'longitude fix1))
+          (lat0 (type-field-get 'gps 'latitude fix0))
+          (lon0 (type-field-get 'gps 'longitude fix0)))
+      0)))
   
   ;; open the gps host, or connect to the gpsd server
 (define (gps-setup host)    
@@ -80,10 +90,13 @@ extern void libgps_read(struct gps_data_t *data, double results[6]);
                       (let ((results (make-f64vector 6 0)))
                         (libgps_read data results)
                         (sensor-update `(gps ,index)
-                                       (map (lambda (result)
-                                              (if (nan? result) #f result))
-                                            (f64vector->list results))))))
-               )))))))
+                                       (let ((current-gps
+                                              (map (lambda (result)
+                                                     (if (nan? result) #f result))
+                                                   (f64vector->list results))))
+                                         (append results
+                                                 (gps-heading-speed-from-position (sensor-query `(gps ,index))
+                                                                                  current-gps))))))))))))))
 
 (define (parse-gpsd-line line)
   (define (parse-gpsd-report line)
