@@ -5,7 +5,7 @@
 ;; License as published by the Free Software Foundation; either
 ;; version 3 of the License, or (at your option) any later version.
 
-(use gl)
+
 
 ; make syntax for various opengl features to make them nicer
 (define-syntax glBegin (syntax-rules ()

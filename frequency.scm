@@ -5,6 +5,8 @@
 ;; License as published by the Free Software Foundation; either
 ;; version 3 of the License, or (at your option) any later version.
 
+(declare (unit frequency))
+
 (use srfi-1)
 
 ; convert data into to the frequency domain

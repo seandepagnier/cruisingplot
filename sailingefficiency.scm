@@ -14,7 +14,7 @@
 
 ; updates fields by running-function which takes fields (C A N)
 ; C is the new data value
-; A is the previous average value
+; A is the previous value
 ; N is the count of updates
 (define (install-running-calculator running-name running-function name field #!optional (index 0))
   (data-register-callback
@@ -55,4 +55,5 @@
 (define (new-wind-direction-speed-plot)
   (data-register-callback 
 
-(define (calculate-hull-speed
+(define (calculate-hull-speed-knots LWLft)
+  (* 1.34 (sqrt LWLft)))

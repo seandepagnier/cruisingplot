@@ -5,6 +5,8 @@
 ;; License as published by the Free Software Foundation; either
 ;; version 3 of the License, or (at your option) any later version.
 
+(declare (unit history))
+
 ; historys store a list of lists of numbers of data
 ;  are procedures that take a symbol for the operation:
 ; dump - return a list of history pairs ((T1 value1 .. valuem) ... (Tn value1 ... valuem))
@@ -32,8 +34,11 @@
                                (cons (car history) (each-history (cdr history)))))))
          ; recalculate min and max
          (let ((history-values (map second history)))
-           (set! minvalues (apply map min history-values))
-           (set! maxvalues (apply map max history-values))))
+           (cond ((not (null? history-values))
+                  (set! minvalues (fold (lambda args (apply map min args))
+                                        (car history-values) (cdr history-values)))
+                  (set! maxvalues (fold (lambda args (apply map max args))
+                                        (car history-values) (cdr history-values)))))))
        ((apply-clippings)
         (let ((mins (first args))
               (maxs (second args)))

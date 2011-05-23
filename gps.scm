@@ -5,35 +5,84 @@
 ;; License as published by the Free Software Foundation; either
 ;; version 3 of the License, or (at your option) any later version.
 
-;; This file handles reading data from a gps, either raw or through gpsd
+(declare (unit gps))
+(declare (uses sensor units types utilities))
+
+(use easyffi gl glu glut)
+
+(include "glshortcuts.scm")
+
+;; This file handles reading data from a gps through libgps
+
+(foreign-parse "
+extern int gps_read(struct gps_data_t *gpsdata);
+extern bool gps_waiting(struct gps_data_t *gpsdata);
+extern int gps_stream(struct gps_data_t *gpsdata, 
+		      unsigned int flags, 
+		      /*@null@*/void *);
+
+extern struct gps_data_t *libgps_open(const char *host, const char *port);
+extern int libgps_close(struct gps_data_t *);
+extern void libgps_read(struct gps_data_t *data, double results[6]);
+")
+
+(define DEFAULT_GPSD_PORT	"2947")
+(define WATCH_ENABLE   1)
 
 (type-register 'gps '(time latitude longitude altitude heading speed))
 
-  ;; open the gps device, or connect to the gpsd server
-(define (gps-setup device)
-  (call/cc (lambda (return)
-             (with-exception-handler
-              (lambda _
-                (print "GPS initialization failed on: " device ": " _)
-                (return #f))
-              (lambda ()
-                (let* ((split (string-split device ":"))
-                       (port (if (null? (cdr split))
-                                 2947
-                                 (string->number (cadr split)))))
-                  (verbose "Trying to connect to gpsd server at " (car split)
-                           " port " port) 
-                  (let-values ([(i o) (tcp-connect (car split) port) ])
-                              (verbose "Success connecting to gps on " (car split))
-                              (let ((index (sensor-index-count 'gps)))
-                                (verbose "reporting as gps " index)
-                                (write "w\n" o) ; put in query mode
-                                (make-line-reader i
-                                 (lambda (line)
-                                   (let ((report (parse-gpsd-line line)))
-                                     (if report
-                                         (sensor-update `(gps ,index) report))))))
-                              (return #t))))))))
+(define (register-gps-computations)
+  (computation-register-first-alias 'gps '(gps))
+
+  (computation-register 'gps-latitude "latitude in degrees from gps" '(gps)
+                        (lambda () (sensor-field-get 'gps 'latitude)))
+     
+  (computation-register 'gps-longitude "longitude in degrees from gps" '(gps)
+                        (lambda () (sensor-field-get 'gps 'longitude)))
+  
+  (computation-register 'gps-altitude "altitude in meters from gps" '(gps)
+                        (lambda () (sensor-field-get 'gps 'altitude)))
+  
+  (computation-register 'gps-speed "speed in knots from gps" '(gps)
+                        (lambda () (m/s->knots (sensor-field-get 'gps 'speed))))
+  
+  (computation-register 'gps-heading "heading in degrees from gps" '(gps)
+                        (lambda () (sensor-field-get 'gps 'heading)))
+  
+  (computation-register 'gps-time "gps timestamp" '(gps)
+                        (lambda () (sensor-field-get 'gps 'time))))
+
+  
+  ;; open the gps host, or connect to the gpsd server
+(define (gps-setup host)    
+  (let* ((split (string-split (if host host "localhost") ":"))
+         (port (if (null? (cdr split))
+                   DEFAULT_GPSD_PORT
+                   (cadr split))))
+    (verbose "Trying to connect to gpsd server at "
+             (car split) " port " port) 
+    (let ((data (libgps_open (car split) port)))
+      (if (not data)
+          (error "GPS initialization failed on " (string-append (car split) ":" port))
+          (let ((index (sensor-new-index 'gps)))
+            (verbose "Success connecting to gps on "
+                     (car split) " reporting as gps " index)
+            (if (zero? index) (register-gps-computations))
+
+            (gps_stream data WATCH_ENABLE #f)
+            (push-exit-handler (lambda () (verbose "Closing gps " index) (libgps_close data)))
+
+            (create-periodic-task
+             (string-append "gps " (number->string index) " task") .1
+             (lambda ()
+               (cond ((gps_waiting data)
+                      (gps_read data)
+                      (let ((results (make-f64vector 6 0)))
+                        (libgps_read data results)
+                        (if (not (nan? (second (f64vector->list results))))
+                            (sensor-update `(gps ,index) (f64vector->list results))))))
+
+               )))))))
 
 (define (parse-gpsd-line line)
   (define (parse-gpsd-report line)
@@ -75,7 +124,7 @@
 		     (+ (floor (/ val 100))
 			(/ (remainder val 100) 60)))
 		   (if (< fix 1) ; hacked to turn on without DGPS
-		       (print "warning, only normal GPS not DGPS fix, discarding")
+		       (warning "only normal GPS not DGPS fix, discarding")
 		       (begin
 			 (if (equal? "S" ns)
 			     (set! north (- north)))
@@ -83,24 +132,110 @@
 			     (set! east (- east)))
                          (list time north east alt hd 0))))))))))
 
-(computation-register 'gps-speed "speed in knots from gps"
-                      (lambda () (m/s->knots (sensor-field-get 'gps 'speed))))
-
-(computation-register 'gps-heading "heading in degrees from gps"
-                      (lambda () (sensor-field-get 'gps 'heading)))
-
-(computation-register 'gps-time "gps timestamp"
-                      (lambda () (sensor-field-get 'gps 'time)))
+;; now hack the geomag c program in place
+(foreign-parse "extern int geomag70(char *modelfilename,
+                         double latitude, double longitude, double alt,
+                         int day, int month, double year,
+                         double results[14]);");
 
 ;; Routines for International Geomagnetic Reference Field
 ;  provide magnetic inclination, declination, and field strength given gps input
-(define (compute-IGRF date lattitude longitude altitude)
-  1
-)
+;
+; results gives DIHXYZF and respective rate of change for each in nT
 
-(computation-register 'magnetic-inclination "The inclination of the magtitude of the field, calculated from gps position, or with no gps, measured from angle of magnetometer and accelerometer"
-                      (lambda () 0))
-(computation-register 'magnetic-declination "The declination of the magnetic field, calculated from gps position, and date"
-                      (lambda () 0))
-(computation-register 'field-strength "The declination of the magnetic field, calculated from gps position, and date"
-                      (lambda () 0))
+(define (compute-gps-IGRF)
+  (let ((results (make-f64vector 14 0))
+        (date (current-date)))
+    (if (= -1 (geomag70
+               "geomag70/IGRF11.COF"
+               (sensor-field-get 'gps 'latitude)
+               (sensor-field-get 'gps 'longitude)
+               (sensor-field-get 'gps 'altitude)
+               (date-day date) (date-month date) (date-year date)
+               results))
+        (warning "geomag70 failed"))
+    results))
+
+(computation-register 'magnetic-declination "The declination of the magnetic field, calculated from gps position, and date" '(gps)
+                      (lambda () (f64vector-ref (compute-gps-IGRF) 0)))
+
+(computation-register 'magnetic-inclination "The inclination of the magtitude of the field, calculated from gps position, or with no gps, measured from angle of magnetometer and accelerometer"  '(gps)
+                      (lambda () (f64vector-ref (compute-gps-IGRF) 1)))
+
+(computation-register 'magnetic-fieldstrength "The declination of the magnetic field, calculated from gps position, and date" '(gps)
+                      (lambda () (f64vector-ref (compute-gps-IGRF) 6)))
+
+(define gps-plot #f)
+
+(define (create-gps-plot-from-string arg)
+  (glut:ReshapeFunc
+   (lambda (w h)
+     (gl:Viewport 0 0 w h)
+         ; setup projection matrix
+     (gl:MatrixMode gl:PROJECTION)
+     (gl:LoadIdentity)))
+
+    (glut:DisplayFunc
+     (let ((lastspd 0) (lasthdg 0))
+       (lambda ()
+         (define (draw-print . args)
+           (glLetMatrix
+            (let each-char ((l (string->list (with-output-to-string (lambda () (for-each display args))))))
+              (cond ((not (null? l))
+                     (glut:StrokeCharacter glut:STROKE_MONO_ROMAN (car l))
+                     (each-char (cdr l)))))))
+         
+         (gl:ClearColor 0 0 0 0)
+         (gl:Clear gl:COLOR_BUFFER_BIT)
+         
+         (glColor 1 1 1)
+         (glLetMatrix
+          (gl:LineWidth 4)
+          (gl:Translated -1 .9 0)
+          (gl:Scaled .001 .001 .001)
+          
+          (let ((spd (computation-calculate 'gps-speed))
+                (hdg (computation-calculate 'gps-heading)))
+            (draw-print "Speed: " (round-to-places spd 2) " knts")
+            (gl:Translated 0 -200 0)
+            (draw-print "Accel: " (round-to-places (- spd lastspd) 2))
+            (set! lastspd spd)
+
+            (gl:Translated 0 -200 0)
+            (draw-print "Heading: " (round-to-places hdg 2))
+            (gl:Translated 0 -200 0)
+            (draw-print "Turn Rt: " (round-to-places (- hdg lasthdg) 2))
+            (set! lasthdg hdg)))
+
+       (glut:SwapBuffers)
+       (glut:TimerFunc 1000 glut:PostWindowRedisplay (glut:GetWindow)))))
+
+    (glut:KeyboardFunc
+     (lambda (key x y)
+       (case key
+         ((#\esc #\q) (exit))
+         ((#\f) (glut:FullScreen)))
+       (glut:PostRedisplay)))
+    
+    (glut:SpecialFunc
+     (lambda (key x y)
+       (if (glut-HasModifiers glut:ACTIVE_SHIFT)
+           (let ((rs 1))
+             (cond
+              ((= key glut:KEY_LEFT) (RotateAfter rs 0 1 0))
+              ((= key glut:KEY_RIGHT) (RotateAfter rs 0 -1 0))
+              ((= key glut:KEY_UP) (RotateAfter rs 1 0 0))
+              ((= key glut:KEY_DOWN) (RotateAfter rs -1 0 0))
+              ((= key glut:KEY_PAGE_UP) (RotateAfter rs 0 0 1))
+              ((= key glut:KEY_PAGE_DOWN) (RotateAfter rs 0 0 -1))))
+           (let ((ts 1))
+             (cond
+              ((= key glut:KEY_LEFT) (gl:Translatef ts 0 0))
+              ((= key glut:KEY_RIGHT) (gl:Translatef (- ts) 0 0))
+              ((= key glut:KEY_UP) (gl:Translatef 0 (- ts) 0))
+              ((= key glut:KEY_DOWN) (gl:Translatef 0 ts 0))
+              ((= key glut:KEY_PAGE_UP) (set-zoom .5))
+              ((= key glut:KEY_PAGE_DOWN) (set-zoom 2))
+              )))
+       (glut:PostRedisplay))))
+

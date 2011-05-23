@@ -5,6 +5,8 @@
 ;; License as published by the Free Software Foundation; either
 ;; version 3 of the License, or (at your option) any later version.
 
+(declare (unit sound))
+
 ; Support various sound drivers
 (define (sound-play-wav-file filename)
   (warning "No sound driver loaded, using alsaplayer... ")
@@ -13,7 +15,7 @@
 (define (sound-init driver)
   (case driver
     ((openal)
-     (use openal)
+;     (use openal)
      (let ((device (alc:OpenDevice #f))
            (context (alc:CreateContext device #f)))
        (alc:MakeContextCurrent context)

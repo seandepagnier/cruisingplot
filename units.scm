@@ -5,6 +5,8 @@
 ;; License as published by the Free Software Foundation; either
 ;; version 3 of the License, or (at your option) any later version.
 
+(declare (unit units))
+
 (define (mph->knots x) (* x .868976242))
 (define (m/s->knots x) (* x 1.94384449))
 

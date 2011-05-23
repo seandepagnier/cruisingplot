@@ -7,42 +7,56 @@
 
 ; This type of networking provides both client and server capabilities and
 ; gives unlimited control.  The basic mechanic is all scheme expressions
-; delivered over the socket are evaluated remotely.
+; delivered over the socket are evaluated remotely, and the results sent back
+; over the network
+
+(declare (unit net))
 
 (use tcp srfi-18)
 
 (define net-default-port 23227)
 
-(define (net-repl)
+; given an input and output port, in a loop,
+; read from input, evaluate, and write to output
+(define (net-repl i o)
   (call/cc (lambda (cont)
              (with-exception-handler
               (lambda _ (cont #f))
-              (lambda () (write (eval (read))) (newline)))))
-  (net-repl))
+              (lambda ()
+                (let loop ()
+                  (with-input-from-port i
+                    (lambda () (with-output-to-port o
+                                 (lambda ()
+                                   (write (eval (read)))
+                                   (newline)))))
+                  (task-sleep .001) (loop)))))))
 
-; run a server on a specified port
+; start a server on a specified port
 ; the server handles many clients and simply performs evaluation
 (define (net-server port)
-  (thread-start!
+  (create-task
    (lambda ()
      (let ((port (if port port net-default-port)))
-       (verbose "starting server thread on port " port)
+       (verbose "starting server task on port " port)
        (let ((listener (tcp-listen port)))
          (let accept-loop ()
            (let-values
             (((i o) (tcp-accept listener)))
-            (thread-start!
-             (lambda () (with-input-from-port i
-                          (lambda () (with-output-to-port o
-                                       net-repl))))))
+            (create-task (lambda () (net-repl i o))))
            (accept-loop)))))))
 
-; connect to a server at a given address
-(define (net-add-client address expression)
+; connect to a server at a given address, write expression, and call receiver
+; repeatedly for each lien
+(define (net-add-client address expression receiver)
   (let-values (((i o)
                 (if (string-contains address ":")
                     (tcp-connect address)
                     (tcp-connect address net-default-port))))
-              (thread-start! (lambda () ; handle return requests
-                               (with-input-from-port i
-                                 net-repl)))))
+              (create-task (lambda () ; handle return requests
+                               (verbose "connected to server")
+                               (write expression o)
+                               (newline o)
+                               (let loop () (receiver (read i)) (loop))))
+
+              ; delay after connecting to server to allow some data
+              (task-sleep .5)))

@@ -4,13 +4,23 @@
 ;; modify it under the terms of the GNU General Public
 ;; License as published by the Free Software Foundation; either
 ;; version 3 of the License, or (at your option) any later version. 
+
+
 ;; This file handles storing values (primarily from sensors)
 ;; values can be installed, queried, and callbacks can be installed as well
 ;; this should work even across a network 
 
-;(use srfi-69)
+(declare (unit sensor))
 
-(define sensor-log-port #f)
+(use srfi-69)
+
+(define sensor-log-ports '())
+
+(define (sensor-log-to-port port)
+  (set! sensor-log-ports (cons port sensor-log-ports)))
+
+(define (sensor-log-to-file filename)
+  (sensor-log-to-port (open-output-file filename)))
 
 (define sensors (make-hash-table))
 
@@ -29,6 +39,16 @@
 (define (sensor-index name-key)
   (if (list? name-key) (cadr name-key) 0))
 
+; get a list if indicies of of sensors by name
+(define (sensor-indicies name)
+  (let each-value ((values (hash-table->alist sensors)))
+    (cond ((null? values) '())
+          ((eq? (caar values) name)
+           (cons (cadar values)
+                 (each-value (cdr values))))
+          (else
+           (each-value (cdr values))))))
+
 ; get the proper hash key for a name or key
 (define (sensor-key name-key)
   (list (sensor-name name-key) (sensor-index name-key)))
@@ -37,15 +57,24 @@
 (define (sensor-query name-key)
   (let ((key (sensor-key name-key)))
     (if (hash-table-exists? sensors key)
-        (car (hash-table-ref sensors key))
+        (hash-table-ref sensors key)
         (error "sensor-query on nonexistant key " key))))
 
 ; Open a file and automatically update values from it
-(define (sensor-replay-logfile filename rate)
-  (thread-start!
+(define (sensor-replay-logfile arg)
+  (let ((options (create-options
+                  (list (make-number-verifier 'rate "rate of replay" 1 .001 1000))
+                  (string-append "  Set input log file, and option\n")
+                  #f)))
+    (let ((filename (parse-basic-arg-options-string options arg)))
+      (verbose "replaying data from log file '" filename "' at " (options 'rate) "x speed")
+
+  (create-task
+   (string-append "replay task for file: " filename)
    (lambda ()
      (with-input-from-file filename
        (lambda ()
+         (let ((sensor-key-mapping (make-hash-table)))
          (let each-line ()
            (let ((line (read-line)))
              (if (not (eof-object? line))
@@ -54,27 +83,57 @@
                        (let ((time (car split))
                              (key (cadr split))
                              (value (caddr split)))
-                             (thread-sleep! (/ (- time (current-time)) replayrate))
-                         (sensor-update key value)))
+                         (task-sleep! (- (/ time (options 'rate)) (elapsed-seconds)))
+                         (if (hash-table-exists? sensor-key-mapping key)
+                             (sensor-update (hash-table-ref sensor-key-mapping key) value)
+                             (let ((new-key `(,(sensor-name key)
+                                              ,(sensor-new-index (sensor-name key)))))
+                               (verbose "replay sensor from file '" filename "' " key " -> " new-key)
+                               (hash-table-set! sensor-key-mapping key new-key))))))))
                    (each-line))
                  (verbose "log file '" filename "' complete")))))))))
+
+(define (make-raw-sensor-computation name index)
+  (computation-register (string->symbol (string-append (symbol->string name)
+                                                       "."
+                                                       (number->string index)))
+                        (string-append (symbol->string name) " " (number->string index))
+                        `(,name)
+                        (lambda () (sensor-query `(,name ,index)))))
 
 ; whenever a value needs to be updated, call this
 ; if the table did not have this value, it is now added
 (define (sensor-update name-key value)
-  (verbose "sensor update: " name-key " " value)
-  (if sensor-log-port
-      (with-output-to-port
-          sensor-log-port
-          (lambda ()
-            (print `(,(current-time) ,name-key ,value)))))
+;  (very-verbose "sensor update: " name-key " " value)
+  (set! sensor-log-ports
+        (let each-port ((ports sensor-log-ports))
+          (cond ((null? ports) '())
+                (else
+                 (if (call/cc
+                      (lambda (cont)
+                        (with-exception-handler
+                         (lambda _ (cont #f))
+                         (lambda ()
+                           (with-output-to-port (car ports)
+                             (lambda () (print `(,(elapsed-seconds) ,name-key ,value))))
+                           (cont #t)))))
+                     (cons (car ports) (each-port (cdr ports)))
+                     (each-port (cdr ports)))))))
 
-  (let ((key (sensor-key name-key)))
-    (if (not (hash-table-exists? sensors key))
-           (hash-table-set! sensors key (list value))
-           (let ((ref (hash-table-ref sensors key)))
-             (set-car! ref value)
-             (for-each (lambda (callback) (callback)) (cdr ref))))))
+  ; add computation for raw sensor data
+  (if (not (hash-table-exists? sensors (sensor-key name-key)))
+      (make-raw-sensor-computation (sensor-name name-key) (sensor-index name-key)))
+
+  ; store value locally
+  (hash-table-set! sensors (sensor-key name-key) value))
+
+
+(define (sensor-net-client address)
+  (net-add-client address
+                  '(let ((port (current-output-port))) (sensor-log-to-port port) 'ok)
+                  (lambda (data)
+                    (if (not (eq? data 'ok))
+                        (sensor-update (second data) (third data))))))
 
 ; return the number of entrees in the table with this name
 (define (sensor-index-count name)
@@ -83,77 +142,15 @@
         (index-loop (+ index 1))
         index)))
 
+; register a new sensor index without updating it yet, return the index
+(define (sensor-new-index name)
+  (let ((index (sensor-index-count name)))
+    (make-raw-sensor-computation name index)
+    (hash-table-set! sensors `(,name ,index) #f)
+    index))
+
 ; return a list of valid keys
 (define (sensor-query-keys) (hash-table-keys sensors))
-
-; the callback function is called with the updated sensor whenever it is updated
-; eg: (sensor-install-callback 'gps (lambda (gpssensor) (print "gpssensor: " gpssensor)))
-(define (sensor-register-callback name-keys callback)
-  (let ((keys (map sensor-key name-keys)))
-    (cond ((let all ((keys keys))
-             (cond ((null? keys) #t)
-                   ((hash-table-exists? sensors (car keys)) (all (cdr keys)))
-                   (else #f)))
-           (let ((refs (map (lambda (key) (hash-table-ref sensors key)) keys)))
-            (for-each (lambda (key ref)
-                         (hash-table-set! sensors key
-                                          (cons (car ref) (cons (lambda ()
-                                                                  (callback (map car refs))
-                                                                  (cdr ref))))))
-                       keys refs))
-           #t)
-          (net-client ; attempt to install a remote callback on the server
-           (hash-table-set! sensors key (list #f callback)) ; local callback
-           (sensor-register-remote-callback key)
-           #t)
-          (else
-           (verbose "failed to register callback for " key)
-           #f))))
-
-; register a callback remotely with the server to provide this name-key
-(define (sensor-register-remote-callback name-key)
-  (let ((name (sensor-name name-key))
-        (index (sensor-index name-key)))
-    (let ((net-index (- index (sensor-index-count name))))
-      (verbose "configuring server to send updates for " key)
-      (if (not net-client)
-          (error "sensor-register-remote-callback called without server connection"))
-      (with-output-to-port
-          `(if (not (sensor-install-callback
-                     ,(name net-index)
-                     (let ((port (current-output-port)))
-                       (lambda (sensor)
-                         (write (list 'sensor-update ,key sensor) port)))))
-               (write (list 'display "server failed to provide " ,key) port))
-        net-client))))
-
-
-
-;;; types for fields within each physical sensor
-
-(define types (make-hash-table))
-
-; provide a means to extract elements from a list by name
-; handler should take the subfield and a value
-(define (type-register name fields)
-  (hash-table-set! types name fields))
-
-; generic means to operate on the type
-(define (type-field-apply name field values func)
-  (let each-def ((definition (hash-table-ref types name))
-                 (values values))
-    (cond 
-     ((null? definition) (error "Field " field " does not exist in " name))
-     ((eq? field (car definition)) (func values))
-     (else (each-def (cdr definition) (cdr values))))))
-
-; get the right field from a list
-(define (type-field-get name field values)
-  (type-field-apply name field values car))
-
-; set a field in a list
-(define (type-field-set! name field values value)
-  (type-field-apply name field values (lambda (values) (set-car! values value))))
 
 ;;;; line reader used by various specific sensors
 
@@ -161,42 +158,65 @@
 (define readers '())
 
 (define (make-reader port proc end?)
-  (thread-start!
-   (lambda ()
-     (let ((cur ""))
-         (let loop ()
-           (if (char-ready? port)
-               (let ((c (read-char port)))
-                 (call/cc
-                  (lambda (flushed)
-                    (cond ((end? c (lambda ()
-                                     (set! cur "")
-                                     (flushed #t)))
-                           (proc cur)
-                           (set! cur ""))
-                          (else (set! cur (string-append cur (string c))))))))
-               (thread-sleep! .1))
-           (loop))))))
+  (create-periodic-task
+   (string-append "reader for " (port->string port)) .05
+   (let ((cur ""))
+     (lambda ()
+       (if (char-ready? port)
+           (let ((c (read-char port)))
+             (call/cc
+              (lambda (flushed)
+                (cond ((end? c (lambda ()
+                                 (set! cur "")
+                                 (flushed #t)))
+                       (proc cur)
+                       (set! cur ""))
+                      (else (set! cur (string-append cur (string c)))))))))))))
 
-(define (make-line-reader port proc)
-  (make-reader port proc (lambda (c flush) (equal? c #\newline))))
+
+(define (make-line-reader port-proc proc)
+  (create-periodic-task .05
+   (lambda ()
+     (let loop ()
+       (if (char-ready? (port-proc))
+           (let ((l (read-line (port-proc))))
+             (proc l)
+             (loop)))))))
+
 
 (define (sensor-field-get name-key field)
   (if (sensor-contains? name-key)
       (type-field-get (sensor-name name-key) field
-                      (sensor-query name-key))
-      0))
+                      (sensor-query name-key)) 0))
 
+(define (open-serial-device-with-handler device baud handler)
+  (call/cc (lambda (bail)
+             (verbose "Trying to open serial device at " device)
+             (let ((ret (with-exception-handler
+                         (lambda _
+                           (apply bail (handler _)))
+                         (lambda ()
+                           (let ((cmd (string-append "stty -F " device " "  (number->string baud)
+                                                     " ignbrk -icrnl -opost -onlcr -isig"
+                                                     " -icanon -iexten -echo -echoe -echok"
+                                                     " -echoctl -echoke")))
+                             (verbose "executing shell command: " cmd)
+                             (system cmd))
+                           (list (open-input-file device)
+                                 (open-output-file device))))))
+                   (verbose "Success opening " device)
+                   (apply values ret)))))
+             
 (define (open-serial-device device baud)
-  (call/cc
-   (lambda (return)
-     (with-exception-handler
-      (lambda _
-        (print "device initialization failed on: " device ": " _)
-        (return #f))
-      (lambda ()
-        (system (string-append "stty -F " device " "  (number->string baud)))
-        (verbose "Trying to open serial device at " device)
-        (verbose "Success opening " device)
-        (values (open-input-file device)
-                (open-output-file device)))))))
+  (open-serial-device-with-handler
+   device baud (lambda _
+                 (print "device initialization failed on: " device ": " _)
+                 (exit))))
+
+(define (try-opening-serial-devices devices baud)
+  (if (null? devices)
+      (values #f #f)
+      (let-values (((i o) (open-serial-device-with-handler (car devices) baud
+                                                           (lambda _ '(#f #f)))))
+        (if (and i o) (values i o)
+            (try-opening-serial-devices (cdr devices) baud)))))

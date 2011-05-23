@@ -5,6 +5,9 @@
 ;; License as published by the Free Software Foundation; either
 ;; version 3 of the License, or (at your option) any later version.
 
+(declare (unit spherical))
+
+(declare (uses algebra))
 
 ;; This file contains routines for computations in spherical coordinates
 
@@ -12,11 +15,17 @@
 (define (spherical-distance lat1 lon1 lat2 lon2)
   (acos (+ (* (sin lat1) (sin lat2)) (* (cos lat1) (cos lat2) (cos (- lon1 lon2))))))
 
+(define (spherical-distance-degrees lat1 lon1 lat2 lon2)
+  (spherical-distance (d2r lat1) (d2r lon1) (d2r lat2) (d2r lon2)))
+
 ;; the initial heading for a great circle course from point 1 to point 2
 (define (spherical-heading lat1 lon1 lat2 lon2)
   (remainder (atan (* (sin (- lon1 lon2)) (cos lat2))
                     (- (* (cos lat1) (sin lat2)) (* (sin lat1) (cos lat2) (cos (- lon1 lon2)))))
-             (* 2 pi)))
+             (* 2 Pi)))
+
+(define (spherical-heading-degrees lat1 lon1 lat2 lon2)
+  (r2d (spherical-heading (d2r lat1) (d2r lon1) (d2r lat2) (d2r lon2))))
 
 ;; return the latitude and longitude of the normal axis of the great circle
 (define (spherical-great-circle lat1 lon1 lat2 lon2)
@@ -35,7 +44,7 @@
    (asin (+ (* (sin lat) (cos d)) (* (cos lat) (sin d) (cos tc))))
    (remainder (- lon (atan (* (sin tc) (sin d) (cos lat)
                               (- (cos d) (* (sin lat1) (sin lat))))))
-              (* 2 pi))))
+              (* 2 Pi))))
 
 ;; give the maximum latitude of a great circle given a latitude and course
 ;; derived from clairaut's formula:
@@ -51,9 +60,9 @@
   (glBegin GL_LINE_LOOP
            (let ((z (sin lat))
                  (r (cos lat))
-                 (astep (/ (* 2 pi) steps)))
+                 (astep (/ (* 2 Pi) steps)))
              (let each-angle ((a 0))
-               (cond ((< a (* 2 pi))
+               (cond ((< a (* 2 Pi))
                       (gl:Vertex3f (* r (sin a)) (* r (cos a)) z)
                       (each-angle (+ a astep))))))))
 
@@ -61,9 +70,9 @@
   (gl:PushMatrix)
   (gl:Rotated lon 0 0 1)
   (glBegin GL_LINE_LOOP
-           (let ((astep (/ (* 2 pi) steps)))
+           (let ((astep (/ (* 2 Pi) steps)))
              (let each-angle ((a 0))
-               (cond ((< a (* 2 pi))
+               (cond ((< a (* 2 Pi))
                       (gl:Vertex3f 0 (* r (sin a)) (* r (cos a)))
                       (each-angle (+ a astep)))))))
   (gl:PopMatrix))

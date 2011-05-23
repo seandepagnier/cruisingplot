@@ -5,6 +5,8 @@
 ;; License as published by the Free Software Foundation; either
 ;; version 3 of the License, or (at your option) any later version.
 
+(declare (unit draw))
+
 (define (draw-vector-arrow a b)
   (let ((m (map average a b))
         (n `(,(* .15 (- (cadr a) (cadr b)))
