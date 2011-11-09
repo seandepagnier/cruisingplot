@@ -125,8 +125,8 @@
     (if (zero? n) "" (string-append " " (integer->name n))))
   (if (negative? n)
       (string-append "negative " (integer->name (abs n)))
-      (let each-div ((divs '((1e15 "quadrillion") ((1e12 "trillion") (1e9 "billion")
-                             (1e6 "million") (1e3 "thousand") (1e2 "hundred")))))
+      (let each-div ((divs '((1e15 "quadrillion") (1e12 "trillion") (1e9 "billion")
+                             (1e6 "million") (1e3 "thousand") (1e2 "hundred"))))
         (cond ((null? divs) ; under 100 now
            (if (< n 20)
                (case (inexact->exact n)

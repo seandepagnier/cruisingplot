@@ -25,7 +25,13 @@
 
     (computation-register-unique-name (string->symbol (options 'name))
                           (string-append "filtered value of: " filter-string)
-                          '() (lambda () (last value)))
+                          '() (lambda () 
+                                (case  (options 'type)
+                                  ((lowpass) (last value))
+                                  ((highpass) (let ((c (computation))) (if c (- (first c) (last value)) #f)))
+                                  (else (error "unknown filter type" (options 'type))))))
+
+
     (verbose "created " (integer->primary-name (options 'order)) " order " (options 'type) " filter '"
              (options 'name) "' filtering '" filter-string "' @ "
              (/ (options 'update-period)) "hz")
@@ -33,19 +39,19 @@
      `(filter ,filter)
      (options 'update-period)
      (lambda ()
-       (let* ((c (computation))
-              (fc (if c (first c) #f))
-              (lp ((if (eq? (options 'type) 'lowpass) * /)
-                   (current-task-period) (options 'frequency))))
+       (let ((c (computation)))
          (set! value
-               (let each-order ((value value)
-                                (fc fc))
-                 (if (null? value) '()
-                     (let ((filtered-value
-                            (if (not (first value)) fc
-                                (case (options 'type)
-                                  ((lowpass) (+ (* lp fc) (* (- 1 lp) (first value))))
-                                  (else (error "unknown filter type" (options 'type)))))))
-                       (cons filtered-value
-                             (each-order (cdr value) filtered-value))))))))
-     )))
+               (if c (let ((fc (first c))
+                           (lp (*
+                                (current-task-period) (options 'frequency))))
+                       (let each-order ((value value)
+                                        (fc fc))
+                         (if (null? value) '()
+                             (let ((filtered-value
+                                    (if (not (first value)) fc
+                                        (case (options 'type)
+                                          ((lowpass highpass) (+ (* lp fc) (* (- 1 lp) (first value))))
+                                          (else (error "unknown filter type" (options 'type)))))))
+                               (cons filtered-value
+                                     (each-order (cdr value) filtered-value))))))
+                   (cons #f (cdr value)))))))))

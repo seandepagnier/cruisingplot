@@ -203,29 +203,6 @@
   
   'tilt-compensation-update))
    
-(plot-add-extra-display-function
- (lambda (left right top bottom)
-   (let ((state tilt-comp-last
-;          (run-tilt-compensation)
-;          (matrix '((1) (1) (0) (0)))
-          ))
-     (if state
-         (glBegin gl:LINE_STRIP
-                  (gl:LineWidth 3) 
-                  (gl:Color3f 1 0 0)
-
-;  plot  ;  amplitude*sin( 2*Pi*time / period + phase) + bias
-
-                  (for-each (lambda (time)
-                              (glVertex time
-                                        (+ (* (matrix-ref state 0 0)
-                                              (sin (+ (* 2 Pi time (/ (matrix-ref state 1 0)))
-                                                      (matrix-ref state 2 0))))
-                                           (matrix-ref state 3 0))))
-                            (sequence left right .1))
-                  )))))
-
-
 (use numbers srfi-1)
 (define Pi (* 2 (asin 1)))
 (define (sequence from to . step)

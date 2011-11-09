@@ -102,7 +102,6 @@
 
 (define (computation-register-unique-name name info sensors calculation)
   (let ((index (computation-unique-index name)))
-    (print "unique index: " index)
     (cond ((zero? index) (computation-register name info sensors calculation))
           (else
            (if (= 1 index) (computation-register-first-alias name sensors))

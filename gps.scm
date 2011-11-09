@@ -79,9 +79,10 @@ extern void libgps_read(struct gps_data_t *data, double results[6]);
                       (gps_read data)
                       (let ((results (make-f64vector 6 0)))
                         (libgps_read data results)
-                        (if (not (nan? (second (f64vector->list results))))
-                            (sensor-update `(gps ,index) (f64vector->list results))))))
-
+                        (sensor-update `(gps ,index)
+                                       (map (lambda (result)
+                                              (if (nan? result) #f result))
+                                            (f64vector->list results))))))
                )))))))
 
 (define (parse-gpsd-line line)

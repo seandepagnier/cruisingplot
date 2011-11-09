@@ -78,7 +78,7 @@
              (string-append (if (zero? elapsed) "N/A"
                                 (number->string (round-to-places (* 100 (/ t elapsed)) 2)))
                             "%"))
-           (verbose "<" (length tasks) " tasks>"
+           (very-verbose "<" (length tasks) " tasks>"
                          " task-time: " (time-percentage total-run-time)
                          " non-task: " (time-percentage (- elapsed total-run-time total-sleep-time))
                          " sleep: " (time-percentage total-sleep-time))

@@ -46,7 +46,7 @@
    (list
      (make-bounds-verifier)
      (make-number-verifier 'fov "field of view, angle in degrees for 3d projection" 90 0 180)
-     (make-number-verifier 'gridcount "set number of grid lines" 6 0 100)
+     (make-number-verifier 'gridcount "set number of grid lines" 5 0 100)
      (make-number-verifier 'period "how often to update this trace in seconds" .25 0 1000000)
      (make-boolean-verifier 'gridnumbering "enable or disable grid numbering" 'true)
      (make-number-verifier 'framerate "rate to render te plot" 4 .001 1000)
@@ -77,15 +77,8 @@
        `(trace-update ,axes)
        (options 'period)
        (lambda ()
-         (let ((c (computations))
-               (type (options 'type)))
-           (if c (history 'update
-                          (case type
-                            ((2d 3d) c)
-                            ((polar) `(,(* (first c) (sin (deg2rad (second c))))
-                                       ,(* (first c) (cos (deg2rad (second c))))))
-                            (else (error "unknown plot type" type)))))))
-       ))
+         (let ((c (computations)))
+           (if c (history 'update c))))))
     (lambda (op . args)
       (case op
         ((axis-count) (length axes))
@@ -101,10 +94,7 @@
                         (f64vector -1 0 0
                                    (- 1 (/  (- (options 'thickness) 1)
                                             (glut:Get glut:WINDOW_WIDTH))))))
-
          (gl:Enable gl:CLIP_PLANE0)
-
-
          (apply glColor (options 'color))
          (glBegin (case (options 'mode)
                     ((points) (gl:PointSize (options 'thickness)) gl:POINTS)
@@ -112,15 +102,26 @@
                     (else (error "unknown plot mode" mode)))
                   (for-each
                    (lambda (values)
-                     (apply glVertex values))
+                     (apply glVertex
+                            (case (options 'type)
+                              ((2d 3d) values)
+                              ((polar) `(,(* (first values)
+                                             (sin (deg2rad (second values))))
+                                         ,(* (first values)
+                                             (cos (deg2rad (second values))))))
+                              (else (error "unknown plot type" type)))))
                    (history 'dump)))
-
          (gl:Disable gl:CLIP_PLANE0))))))
 
 ; take take min, max pairs, and give overall min max
 (define (bounds-union . bounds)
   (list (apply min (map first bounds))
         (apply max (map second bounds))))
+
+(define (bounds-from-points . points)
+  (let ((no-false-points (remove not points)))
+    (list (apply min no-false-points)
+          (apply max no-false-points))))
 
 (define (find-plot-bounds defaultbounds traces)
   (let ((axis-count ((car traces) 'axis-count)))
@@ -142,12 +143,38 @@
 
   (let ((bounds (find-plot-bounds (options 'bounds) traces)))
     (if (>= (length bounds) 2)
-        (let ((left (first (first bounds)))
-              (right (second (first bounds)))
-              (top (first (second bounds)))
-              (bottom (second (second bounds)))
-              (near (if (< (length bounds) 3) -1 (first (third bounds))))
-              (far (if (< (length bounds) 3) 1 (second (third bounds)))))
+        (let ((rect-bounds
+                        (case (options 'type)
+                        ((2d 3d) bounds) ; already rectangular
+                        ((polar) (let ((r0 (first (first bounds)))
+                                       (r1 (second (first bounds)))
+                                       (a0 (deg2rad (first (second bounds))))
+                                       (a1 (deg2rad (second (second bounds)))))
+                                   (if (or (< a0 (- (* 2 Pi))) (> a1 (* 2 Pi)))
+                                       (warning-once "polar plot bounds are from -360 to 360"))
+                                   `(,(bounds-from-points
+                                       (* r0 (sin a0)) (* r0 (sin a1))
+                                       (* r1 (sin a0)) (* r1 (sin a1))
+                                       (if (and (< a0 (/ Pi 2)) (> a1 (/ Pi 2))) r1 #f)
+                                       (if (and (< a0 (- (/ Pi 2))) (> a1 (- (/ Pi 2)))) (- r1) #f)
+                                       (if (and (< a0 (* (/ 3 2) Pi)) (> a1 (* (/ 3 2) Pi))) (- r1) #f)
+                                       (if (and (< a0 (- (* (/ 3 2) Pi))) (> a1 (- (* (/ 3 2) Pi)))) r1 #f)
+                                       )
+                                     ,(bounds-from-points
+                                       (* r0 (cos a0)) (* r0 (cos a1))
+                                       (* r1 (cos a0)) (* r1 (cos a1))
+                                       (if (and (< a0 0) (> a1 0)) r1 #f)
+                                       (if (and (< a0 Pi) (> a1 Pi)) (- r1) #f)
+                                       (if (and (< a0 (- Pi)) (> a1 (- Pi))) (- r1) #f)
+                                       ))
+
+                                       )))))
+        (let ((left (first (first rect-bounds)))
+              (right (second (first rect-bounds)))
+              (top (first (second rect-bounds)))
+              (bottom (second (second rect-bounds)))
+              (near (if (< (length rect-bounds) 3) -1 (first (third rect-bounds))))
+              (far (if (< (length rect-bounds) 3) 1 (second (third rect-bounds)))))
           
           (gl:MatrixMode gl:MODELVIEW)
           (gl:LoadIdentity)
@@ -188,11 +215,12 @@
                                (glutPrint (round-to-places offset 3))))
                         (each-vgridline (+ offset vspacing)))))))
             ((polar)
-             (let ((rspacing (/ (sqrt (+ (square (- bottom top))
+             (let* ((rspacing (/ (sqrt (+ (square (- bottom top))
                                          (square (- right left))))
-                                (+ (options 'gridcount) 1)))
-                   (aspacing (/ (* 2 pi) (options 'gridcount)))
-                   (number-angle (atan (+ top bottom) (+ left right))))
+                                (* (+ (options 'gridcount) 1))))
+                   (aspacing (/ (* 2 Pi) (* 2 (+ (options 'gridcount) 1))))
+                   (number-angle (atan (+ top bottom) (+ left right)))
+                   (number-radius (/ (* rspacing (+ (options 'gridcount) 1)) 3.7)))
                (let each-rgridline ((offset (sqrt (+ (if (negative? (* top bottom))
                                                          0
                                                          (min (square top) (square bottom)))
@@ -205,13 +233,12 @@
                         (glBegin gl:LINE_LOOP
                                  (let each-theta ((theta 0))
                                    (cond ((< theta (* 2 pi))
-                                          (glVertex (* offset (sin theta)) (* offset (cos theta)))
+                                          (glVertex (* offset (cos theta)) (* offset (sin theta)))
                                           (each-theta (+ theta .1))))))
-
                         (cond ((options 'gridnumbering)
                                (glColor 1 1 1)
-                               (glRasterPos (* offset (cos number-angle))
-                                            (* offset (sin number-angle)))
+                               (glRasterPos (* offset (sin number-angle))
+                                            (* offset (cos number-angle)))
                                (glutPrint (round-to-places offset 3))))
                         (each-rgridline (+ offset rspacing) (+ rcount 1)))))
 
@@ -220,31 +247,27 @@
                           (glColor .6 .6 .6)
                           (glBegin gl:LINES
                                           (glVertex 0 0)
-
                                           (let ((max-r (sqrt (max
                                                               (+ (square left) (square top))
                                                               (+ (square right) (square top))
                                                               (+ (square left) (square bottom))
                                                               (+ (square right) (square bottom))))))
-                                          (glVertex (* max-r (cos offset)) (* max-r (sin offset)))))
+                                          (glVertex (* max-r (sin offset)) (* max-r (cos offset)))))
+                          (cond ((options 'gridnumbering)
+                                 (glColor 1 1 1)
+                                 (glRasterPos (* number-radius (sin offset))
+                                              (* number-radius (cos offset)))
+                                 (glutPrint (round-to-places (rad2deg offset) 1))))
                           (each-agridline (+ offset aspacing))))))))
 
              (gl:Disable gl:LINE_STIPPLE)
           
           (gl:Translatef 0 0 (- near))
-                                        ; Draw the traces
 
+          ; Draw the traces
           (for-each (lambda (trace) (trace 'display)) traces)
 
-  ; Do any additional plot rendering
-          (for-each (lambda (display) (display left right top bottom)) plot-extra-display)
-
-          ))))
-
-(define plot-extra-display '())
-
-(define (plot-add-extra-display-function thunk)
-  (set! plot-extra-display (cons thunk plot-extra-display)))
+          )))))
 
 ; the plot may have multiple instances of various axes, therefore a list
 ; which of lists of axes is used.  Options for the plot for the first element
@@ -358,8 +381,8 @@
 ;  This is a bug workaround, for some reason glut:IdleFunc is never
 ;  called with multiple sub windows, and the only way to get it to work
 ;  is to create a thread for the glut main loop.  With only 1 plot we
-;  can avoid creating threads all together
-
+;  can avoid creating threads all together, we need to debug freeglut and
+;  figure this out because it uses 100% cpu with multiple plots this way
   (if (= (length plots) 1) 
       (let ((scheduler (create-task-scheduler #t)))
         (glut:IdleFunc (lambda ()
@@ -368,4 +391,5 @@
         (glut:MainLoop)))
 
   (glut:IdleFunc (lambda () (thread-sleep! .01)))
-  (thread-start! glut:MainLoop))
+  (thread-start! glut:MainLoop)
+)
