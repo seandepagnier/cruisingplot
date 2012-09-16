@@ -58,7 +58,11 @@
   (let ((key (sensor-key name-key)))
     (if (hash-table-exists? sensors key)
         (hash-table-ref sensors key)
-        (error "sensor-query on nonexistant key " key))))
+        #f)))
+
+(define (sensor-query-indexes name indexes)
+  (map (lambda (index) (sensor-query (list name index)))
+       indexes))
 
 ; Open a file and automatically update values from it
 (define (sensor-replay-logfile arg)
@@ -196,12 +200,13 @@
                          (lambda _
                            (apply bail (handler _)))
                          (lambda ()
-                           (let ((cmd (string-append "stty -F " device " "  (number->string baud)
-                                                     " ignbrk -icrnl -opost -onlcr -isig"
-                                                     " -icanon -iexten -echo -echoe -echok"
-                                                     " -echoctl -echoke")))
-                             (verbose "executing shell command: " cmd)
-                             (system cmd))
+                           (if (not (eq? baud 'none))
+                               (let ((cmd (string-append "stty -F " device " "  (number->string baud)
+                                                         " ignbrk -icrnl -opost -onlcr -isig"
+                                                         " -icanon -iexten -echo -echoe -echok"
+                                                         " -echoctl -echoke min 1 time 5")))
+                                 (verbose "executing shell command: " cmd)
+                                 (system cmd)))
                            (list (open-input-file device)
                                  (open-output-file device))))))
                    (verbose "Success opening " device)
@@ -220,3 +225,79 @@
                                                            (lambda _ '(#f #f)))))
         (if (and i o) (values i o)
             (try-opening-serial-devices (cdr devices) baud)))))
+
+(define (generic-serial-sensor-reader arg)
+  (define options
+    (create-options
+     `(,(make-string-verifier 'device "serial device" "/dev/ttyUSB0")
+       ,(make-boolean-verifier 'windvane-control "control windvane with winch servo thru this device" #f)
+       ,(make-baud-verifier 'baudrate "serial baud rate to use" 'none))
+     "no examples" #f))
+
+  (print "arg " arg)
+  (parse-basic-options-string options arg)
+
+  (let ((i #f) (o #f)
+        (possible-sensors '((accel 1333 #f)
+                            (mag 50000 #f)
+                            (windvane 1023 #f))))
+    (define (config)
+      (display "set /sensors/accel/outputrate " o)
+      (display rate o) (newline o)
+      (display "set /sensors/mag/outputrate " o)
+      (display rate o) (newline o))
+
+    (define (connect-serial-port)
+      (let-values (((ni no) (try-opening-serial-devices
+                             `(,(options 'device) "/dev/ttyUSB0" "/dev/ttyUSB1"
+                               "/dev/ttyACM0" "/dev/ttyACM1")
+                             (options 'baudrate))))
+        (if (options 'windvane-control)
+            (set-windvane-control-port! no))
+        (set! i ni) (set! o no)))
+
+    (connect-serial-port)
+    (cond ((not (and i o))
+           (print "failed to initialize generic serial reader at " (options 'device)))
+          (else
+
+;    (config)
+    (make-line-reader
+     i
+     (lambda (line)
+       (cond ((eof-object? line)
+              (verbose "serial end of file: we will try to reconnect")
+              (connect-serialport)
+              (cond ((not (and i o))
+                     (for-each
+                      (lambda (sensor)
+                        (let ((sensor-indexes (third sensor)))
+                          (if sensor-indexes
+                              (for-each (lambda (sensor-index)
+                                          (sensor-update (list sensor
+                                                               sensor-index) #f))
+                                        sensor-indexes)))
+                        possible-sensors))
+                     (task-sleep 1))))
+             (else
+              (let ((words (string-split line)))
+                (if (> (length words) 1)
+                    (let ((sensor (find (lambda (sensor)
+                                          (equal? (car sensor)
+                                                  (string->symbol (remove-last-character (car words)))))
+                                        possible-sensors))
+                          (sensor-values (map string->number (cdr words))))
+                      (cond (sensor
+                             (if (not (third sensor))
+                                 (set-car! (cddr sensor)
+                                           (let sensor-new-indexes ((local-index 0))
+                                             (if (< local-index (- (length words) 1))
+                                                 (cons (sensor-new-index (first sensor))
+                                                       (sensor-new-indexes (+ local-index 1)))
+                                                 '()))))
+                             (for-each (lambda (sensor-value sensor-index)
+                                         (sensor-update (list (first sensor) sensor-index)
+                                                        (/ sensor-value (second sensor))))
+                                       sensor-values (third sensor)))
+                            (else
+                             (warning-once "unrecognized sensor: " sensor))))))))))))))

@@ -78,7 +78,7 @@
     (list
      (atan sa ca)
      (let ((e (sqrt (- 1 (* sa sa) (* ca ca)))))
-       (* (asin e) (+ 1 (* (- (/ 2 (sqrt 3)) 1) (* e e e))))))))
+       (* (asin e) (+ 1 (* (- (/ 2 (sqrt 3)) 1) (cube e))))))))
 
 
 ; we can smooth wind direction to get more useful measurement using the magnetic

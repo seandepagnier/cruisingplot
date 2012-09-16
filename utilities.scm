@@ -94,6 +94,7 @@
        (lambda ()
          (cond ((equal? arg "help")
                 (nice-print "possible values which can be used in a debugging expression:")
+                (task-sleep 1) ; give tasks time to create computations for the info
                 (computation-info)
                 (exit)))
 
@@ -192,3 +193,10 @@
     (if (or (< (remainder n 100) 20) (zero? (remainder n 10)))
         (base-integer->primary-name n)
         (string-append (integer->name bn) " " (base-integer->primary-name sn)))))
+
+; remove last character from a string
+(define (remove-last-character s)
+  (list->string (reverse (cdr (reverse (string->list s))))))
+
+(define (zero-if-false value)
+  (if value value 0))

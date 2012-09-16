@@ -98,8 +98,8 @@
                )
            (lambda ()
              (let ((associated (read-wifi-info))
-                   (mag-x (sensor-query '(magnetometer 0)))
-                   (mag-y (sensor-query '(magnetometer 1))))
+                   (mag-x (sensor-query '(mag 0)))
+                   (mag-y (sensor-query '(mag 1))))
                (verbose "Wifiaimer associated: " associated)
                (very-verbose "maglog " mag-log)
                                         ; statistics

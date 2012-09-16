@@ -26,6 +26,13 @@
            ((> num max) (print "Value given for option '" name "' is above maximum of " max) max)
            (else num)))))
 
+; like number verifier except #f is also valid
+(define (make-unspecified-number-verifier name help default min max)
+  (make-verifier
+   name help default
+   (lambda (num)
+     (if num (((make-number-verifier name help default min max) 'verify) num) num))))
+
 (define (make-integer-verifier name help default min max)
   (make-verifier name help default
                  (lambda (num)
@@ -46,7 +53,7 @@
 (define (make-baud-verifier name help default)
   (make-discrete-verifier
    name help default
-   '(300 600 1200 2400 4800 9600 19200 38400 57600)))
+   '(none 300 600 1200 2400 4800 9600 19200 38400 57600)))
 
 (define (make-boolean-verifier name help default)
   (make-verifier
@@ -63,7 +70,7 @@
    (lambda (value)
      (cond ((string? value) value)
            ((symbol? value) (symbol->string value))
-           (else (error "string option " name " requires string value\n"))))))
+           (else (error "string option " name " requires string value"))))))
 
 (define (make-color-verifier default)
   (make-verifier 'color 
@@ -139,7 +146,7 @@
             args))
 
 (define (parse-basic-options-string options arg)
-  (parse-basic-split-options-string options (string-split arg ",")))
+  (parse-basic-split-options-string options (string-split (if arg arg "") ",")))
 
 (define (parse-basic-arg-options-string options arg)
   (options-help options arg)

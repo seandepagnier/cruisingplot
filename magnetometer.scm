@@ -9,126 +9,97 @@
 ;; raw data of the digitalsurveyinstruments design
 
 (declare (unit magnetometer))
-(declare (uses sensor))
+(declare (uses sensor leastsquares quaternion))
 
 ; (load "utilities.scm") (load "leastsquares.scm") (load "vector.scm") (load "matrix.scm") (load "algebra.scm")
-
-;; 
-(define (dsi-reader i o rate)
-  (let ((accel-sensor-indexes (map sensor-new-index '(accelerometer accelerometer accelerometer)))
-        (mag-sensor-indexes (map sensor-new-index '(magnetometer magnetometer magnetometer))))
-    (define (config)
-      (display "set /sensors/accel/outputrate " o)
-      (display rate o) (newline o)
-      (display "set /sensors/mag/outputrate " o)
-      (display rate o) (newline o))
-
-    (config)
-    (make-line-reader
-     i
-     (lambda (line)
-       (if (eof-object? line)
-           (begin (verbose "magnetometer end of file: we will try to reconnect")
-                  (let-values (((ni no) (try-opening-serial-devices
-                                         '("/dev/ttyACM0" "/dev/ttyACM1" "/dev/ttyACM2" "/dev/ttyACM3")
-                                         38400)))
-                    (cond ((and ni no)
-                           (set! i ni) (set! o no))
-                          (else
-                           (for-each (lambda (sensor sensor-indexes)
-                                       (for-each (lambda (sensor-index)
-                                                   (sensor-update (list sensor
-                                                                        sensor-index) #f))
-                                                 sensor-indexes))
-                                     '(accelerometer magnetometer)
-                                     (list accel-sensor-indexes mag-sensor-indexes))
-                           (task-sleep 1)))))
-           
-           (let ((words (string-split line)))
-             (if (= (length words) 4)
-                 (let ((sensor (cond ((equal? (car words) "accel:")
-                                      `(accelerometer ,accel-sensor-indexes))
-                                     ((equal? (car words) "mag:")
-                                      `(magnetometer ,mag-sensor-indexes))
-                                     (else #f)))
-                       (sensor-values (map string->number (cdr words))))
-                   (let ((sensor-nominal-scale (if (list? sensor)
-                                                   (case (first sensor)
-                                                     ((accelerometer) 1333)
-                                                     ((magnetometer) 50000)))))
-                   (if sensor
-                       (for-each (lambda (sensor-value sensor-index)
-                                   (sensor-update (list (first sensor) sensor-index)
-                                                  (/ sensor-value sensor-nominal-scale)))
-                                 sensor-values (second sensor))
-                       (warning-once "unrecognized sensor: " sensor)))))))))))
 
 (define accelerometer-calibration #f)
 (define magnetometer-calibration #f)
 (define calibration-measurements '())
-(define max-calibration-points 24)
 
-(define (update-calibration-measurements accel mag)
-  (define (cdist m1 m2)
-    (let ((accel1 `(0 ,(second m1) ,(third m1)))
-          (accel2 `(0 ,(second m2) ,(third m2)))
-          (mag1 `(,(fourth m1) ,(fifth m1) ,(sixth m1)))
-          (mag2 `(,(fourth m2) ,(fifth m2) ,(sixth m2))))
-      (let ((adist (- 1 (vector-dot (normalize accel1) (normalize accel2))))
-            (mdist (- 1 (vector-dot (normalize mag1) (normalize mag2)))))
-        (* adist mdist))))
+(define (update-calibration-measurements accel mag options)
+    (define (cdist m1 m2)
+      (let ((accel1 `(0 ,(second m1) ,(third m1)))
+            (accel2 `(0 ,(second m2) ,(third m2)))
+            (mag1 `(,(fourth m1) ,(fifth m1) ,(sixth m1)))
+            (mag2 `(,(fourth m2) ,(fifth m2) ,(sixth m2))))
+        (let ((adist (- 1 (vector-dot (normalize accel1) (normalize accel2))))
+              (mdist (- 1 (vector-dot (normalize mag1) (normalize mag2)))))
+          (* adist mdist))))
 
-  (define (leastm measurements)
-      (let each-m1 ((m1 measurements)
+    (define (sumcdist m1)
+      (let each-m2 ((m2 calibration-measurements))
+        (if (null? m2) 0
+            (+ (each-m2 (cdr m2)) (cdist m1 (car m2))))))
+
+    (define (leastm)
+      (let each-m1 ((m1 calibration-measurements)
                     (leastd #f)
                     (leastm #f))
         (if (null? m1) leastm
-            (let ((d (let each-m2 ((m2 measurements))
-                       (if (null? m2) 0
-                           (+ (each-m2 (cdr m2)) (cdist (car m1) (car m2)))))))
-              (if (or (not d) (< d leastd))
+            (let ((d (sumcdist (car m1))))
+              (if (or (not leastd) (< d leastd))
                   (each-m1 (cdr m1) d m1)
                   (each-m1 (cdr m1) leastd leastm))))))
 
-  (let ((full-measurement (append accel mag)))
-    (if (< (count calibration-measurements) max-calibration-points)
-        (set! calibration-measurements (cons full-measurement calibration-measurements))
-        (let ((least-m calibration-measurements))
-          (set-car! least-m full-measurement)))))
-                    
-(define (magnetometer-setup device)
-  (let-values (((i o) (open-serial-device device 38400)))
-    (dsi-reader i o 8))
-  (let ((accel-cal-measurements '())
-        (mag-cal-measurements '()))
+  (let ((nmea (append accel mag)))
+    (cond ((any not nmea) #f)
+          ((< (length calibration-measurements) (options 'max-calibration-points))
+           (set! calibration-measurements (cons nmea calibration-measurements))
+           #t)
+          (else
+           (let ((least-m (leastm)))
+             (cond ((> (sumcdist nmea) (sumcdist (car least-m)))
+                  (set-car! least-m nmea)
+                  #t)
+                   (else #f)))))))
+                      
+(define (magnetometer-setup arg)
+  (define options
+    (create-options
+     `(,(make-number-verifier 'max-calibration-points "number of calibration points to use" 24 0 1000)
+       ,(make-string-verifier 'calibration-file
+                              "file to use for saving and loading calibration between runs" "magcal"))
+
+     "currently the magnetometer supports the first 3 axes of accelerometero and magnetometer sensors"
+     #f))
+
+  (parse-basic-options-string options arg)
 
   (create-periodic-task
    "magnetometer-calibration" 1
    (lambda ()
-     (let ((accel (map sensor-query (map (lambda (n) (list 'accelerometer n)) '(0 1 2))))
-           (mag (map sensor-query (map (lambda (n) (list 'magnetometer n)) '(0 1 2)))))
-       (cond ((update-calibration-measurements accel mag)
+     (let ((accel (map sensor-query (map (lambda (n) (list 'accel n)) '(0 1 2))))
+           (mag (map sensor-query (map (lambda (n) (list 'mag n)) '(0 1 2)))))
+       (cond ((update-calibration-measurements accel mag options)
               (set! accelerometer-calibration (compute-accelerometer-calibration
                                                (map (lambda (m) (list (second m) (third m)))
                                                     calibration-measurements)))
-              (set! accelerometer-calibration (compute-accelerometer-calibration
+              (set! magnetometer-calibration (compute-magnetometer-calibration
                                                (map (lambda (m) (list (fourth m) (fifth m) (sixth m)))
                                                     calibration-measurements)))))
 
-       (print "accel " accel)
-       (print "mag " mag)))))
+;      (verbose "accel " (apply-accelerometer-calibration accelerometer-calibration accel)
+ ;              " cal " accelerometer-calibration)
+  ;    (verbose "mag " (apply-magnetometer-calibration magnetometer-calibration mag)
+   ;            " cal " magnetometer-calibration)
+;      (verbose "heading " (computation-calculate 'magnetic-heading))
+
+       ))))
 
 
-(computation-register 'magnetic-heading "The heading derived from the magnetometer" '(magnetometer)
+(computation-register 'magnetic-heading "The heading derived from the magnetometer" '(mag accel)
                       (lambda ()
-                          (let ((accel (map sensor-query (map (lambda (n) (list 'accelerometer n)) '(0 1 2))))
-                                (mag (map sensor-query (map (lambda (n) (list 'magnetometer n)) '(0 1 2)))))
-                            (magnetometer-heading accel mag))))
+                          (let ((accel (sensor-query-indexes 'accel '(0 1 2)))
+                                (mag (sensor-query-indexes 'mag '(0 1 2))))
+                            (if (or (any not accel) (any not mag))
+                                #f
+                                (magnetometer-heading accel mag)))))
 
 (computation-register
  'heading "The true heading derived from the magnetometer and declination, if no magnetometer is specified, gps heading is used" '(gps)
  (lambda ()
-    (if (sensor-contains? 'magnetometer)
+    (if (sensor-contains? 'mag)
         (- (computation-calculate 'magnetic-heading)
            (computation-calculate 'declination))
         (begin (warning-once "using gps heading for heading, "
@@ -147,14 +118,16 @@
 (define (rotate-out-mag accel mag)
     (let ((v1 (normalize accel))
           (v2 (normalize `(0 ,(second accel) ,(third accel)))))
-      (alignaxis (alignaxis mag v1 v2) '(0 0 1))))
+      (align-axis (align-axis mag v1 v2) v2 '(0 0 1))))
 
 ; given raw vectors for accel and mag, determine yaw direction of x axis
 (define (magnetometer-heading accel mag)
   (let ((cal-accel (apply-accelerometer-calibration accelerometer-calibration accel))
         (cal-mag (apply-magnetometer-calibration magnetometer-calibration mag)))
-    (let ((rmag (rotate-out-mag accel mag)))
-      (atan2 (second rmag) (first rmag)))))
+    (if (and cal-accel cal-mag)
+        (let ((rmag (rotate-out-mag accel mag)))
+          (rad2deg (phase-resolve-positive (atan (second rmag) (first rmag)))))
+        #f)))
 
 ; we know boat moves with a time constant.  try to lock on to this for
 ; each sensor input so we can cancel it
@@ -246,19 +219,20 @@
 ;
 
 (define (apply-accelerometer-calibration calibration measurement)
-  (let-values (((yb zb s zrs) (apply values calibration))
-               ((x y z) (apply values measurement)))
-    (if calibration
+  (if (and calibration (not (any not measurement)))
+      (let-values (((yb zb s zrs) (apply values calibration))
+                   ((x y z) (apply values measurement)))
         (vector-scale (/ s) 
                       (let ((biased-calibration `(0 ,(- y yb) ,(- z zb))))
-                        (cond ((not yrs) biased-calibration)
+                        (cond ((not zrs) biased-calibration)
                               (else `(0 ,(second biased-calibration)
-                                        ,(* (third biased-calibration zrs))))))))))
+                                        ,(* (third biased-calibration) zrs)))))))
+        #f))
 
 
 (define (compute-accelerometer-calibration measurements)
       (let ((cal1 (calibrate-biases-and-scale-2d measurements))
-            (cal2 (calibrate-biases-scale-and-relative-scales-2d measurements)))
+            (cal2 (calibrate-biases-scale-and-relative-scale-2d measurements)))
         (cond ((and cal1 cal2) (if (< (second cal1) (second cal2))
                                    (append (first cal1) (make-list 1))
                                    (append (first cal2) (make-list 0))))
@@ -276,28 +250,25 @@
 ;
 
 (define (apply-magnetometer-calibration calibration measurement)
-  (let-values (((xb yb zb s yrs zrs xyc xzc yzc) (apply values calibration))
-               ((x y z) (apply values measurement)))
-    (if calibration
-        (let ((normalized-measurement
-               (vector-scale (/ s) 
-                             (let ((biased-calibration (vector- measurement calibration)))
-                               (cond ((not yrs) biased-calibration)
-                                     ((not xyc) `(,(first biased-calibration)
+  (if (and calibration (not (any not measurement)))
+      (let-values (((xb yb zb s yrs zrs xyc xzc yzc) (apply values calibration))
+                   ((x y z) (apply values measurement)))
+        (vector-scale (/ s) 
+                      (let ((biased-calibration (vector- measurement calibration)))
+                        (cond ((not yrs) biased-calibration)
+                              ((not xyc) `(,(first biased-calibration)
                                                   ,(* (second biased-calibration) yrs)
                                                   ,(* (third biased-calibration) zrs)))
-                                     (else 'unimplemented))))))
-          (if rvx 'unimplemented
-              normalized-measurement))
-        #f)))
+                              (else 'unimplemented)))))
+        #f))
 
 (define (compute-magnetometer-calibration measurements)
 ;    (let ((declination (computation-calculate 'magnetic-declination)))
       (let ((cal1 (calibrate-biases-and-scale-3d measurements))
             (cal2 (calibrate-biases-scale-and-relative-scales-3d measurements)))
         (cond ((and cal1 cal2) (if (< (second cal1) (second cal2))
-                                   (append (first cal1) (make-list 9))
-                                   (append (first cal2) (make-list 7))))
+                                   (append (first cal1) (make-list 5))
+                                   (append (first cal2) (make-list 3))))
               (cal1 (append (first cal1) (make-list 9)))
               (cal2 (error "computed magnetometer relative scale cal but not basic"))
               (else #f))))

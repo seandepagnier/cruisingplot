@@ -13,18 +13,21 @@
 
 (define (create-motor-options)
   (create-options
-   `(,(make-string-verifier 'motordevice "serial device of motor" "/dev/ttyUSB0")
+   `(,(make-string-verifier 'motordevice "serial device of motor" "none")
      ,(make-baud-verifier 'serialbaud "serial baud rate to use" 9600)
-     ,(make-number-verifier 'min-motor-duty "minimum duty cycle" .3 0 1)
-     ,(make-number-verifier 'max-motor-duty "maximum duty cycle" 1 0 1)
+     ,(make-number-verifier 'min-motor-duty "minimum duty cycle" 0 0 1)
+     ,(make-number-verifier 'max-motor-duty "maximum duty cycle" .2 0 1)
      )
   "no examples" #f))
 
 (define (motor-open motor-options)
   (let-values (((motor-input motor-output)
-                (open-serial-device (motor-options 'motordevice) (motor-options 'serialbaud))))
+                (if (equal? (motor-options 'motordevice) "none")
+                    (values #f #f)
+                    (open-serial-device (motor-options 'motordevice) (motor-options 'serialbaud)))))
     (let ((motor (list motor-input motor-output motor-options 'stopped default-motor-calibration)))
       (motor-command motor 0) ; stop motor and flush buffer
+      (if motor-input
       (make-line-reader motor-input
                         (lambda (line)
                           (cond ((eof-object? line)
@@ -42,7 +45,7 @@
                                 ((string= "e" line)
                                  (motor-set-state! motor 'stopped))
                                 (else
-                                 (print "got from motor unhandled message: " line)))))
+                                 (print "got from motor unhandled message: " line))))))
       motor)))
 
 (define motor-input first)
@@ -51,7 +54,10 @@
 (define motor-state fourth)
 (define motor-calibration fifth)
 
-(define default-motor-calibration '(-0.0 7.8824 0.8861 21.49))
+; simrad hacked
+;(define default-motor-calibration '(0 7.8824 0.8861 21.49))
+
+(define default-motor-calibration '(0 1 0 0))
 
 (define (motor-apply-calibration calibration velocity)
   (+ (first calibration)
@@ -68,12 +74,13 @@
 
 ; command motor to turn at a given rate (or duty cycle)
 (define (motor-command motor duty)
-  (print "motor at " ((motor-options motor) 'motordevice) " duty: " duty)
-  (write (inexact->exact (round (* 100 duty))) (motor-output motor))
-  (newline (motor-output motor))
-  (flush-output (motor-output motor))
-  (motor-set-state! motor (if (zero? duty) 'stopped 'moving)))
-
+  (let ((command (inexact->exact (round (* 100 duty)))))
+    (verbose "autopilot motor command:  " command)
+    (cond ((motor-output motor)
+           (write command (motor-output motor))
+           (newline (motor-output motor))
+           (flush-output (motor-output motor))
+           (motor-set-state! motor (if (zero? duty) 'stopped 'moving))))))
 
 ; calibrated motor can be commanded in velocity
 (define (motor-command-velocity motor velocity)
@@ -84,7 +91,6 @@
                    (cond ((> (abs calduty) maxduty) (* (/ calduty (abs calduty)) maxduty))
                          ((< (abs calduty) minduty) 0)
                          (else calduty)))))
-
 
 ; run motor at various speeds to full stops
 ; alternating direction to build a lookup table

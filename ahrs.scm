@@ -11,7 +11,7 @@
 (use srfi-1 environments)
 
 (define (sensor-9dof-setup device)
-  (let ((sensor-names '(accelerometer accelerometer accelerometer
+  (let ((sensor-names '(accel accel accel
                         gyroscope gyroscope gyroscope
                         magnetometer magnetometer magnetometer )))
     (let ((sensor-indexes (map sensor-new-index sensor-names)))
@@ -39,7 +39,7 @@
                             sensor-names sensor-indexes (cdr values)))
                       (else (very-verbose "malformed line from 9dof: " line))))))))))))
     
-; basic ahrs combines accelerometers magnetometers and gyroscopes
+; basic ahrs combines accels magnetometers and gyroscopes
 ; the parameters are lists of indices of which sensors to use, or
 ; 'all to use all available sensors
 
@@ -49,16 +49,16 @@
 (define (default-ahrs-options)
   (create-options
    (list
-     (make-indicies-verifier 'accelerometers 'accelerometer)
-     (make-indicies-verifier 'magnetometers 'magnetometer)
-     (make-indicies-verifier 'gyroscopes 'gyroscope)
+     (make-indicies-verifier 'accels 'accel)
+     (make-indicies-verifier 'mags 'mag)
+     (make-indicies-verifier 'gyros 'gyro)
      (make-discrete-verifier 'filter "which algorithm to use" 'complementary '(complementary ekf ukf))
      (make-number-verifier 'period "period of updates" .1 .001 1000))
    (string-append
-    "  Create ahrs which updates twice a second, using only even axis accelerometers "
+    "  Create ahrs which updates twice a second, using only even axis accels "
     "and odd axis magnetometers,  (all available gyroscopes however)\n"
-    "  '--ahrs=accelerometers=(0 2 4 6 8),magnetometers=(1 3 5 7),period=.5'\n"
-    "  Create an ahrs which only uses accelerometers and magnetometers\n"
+    "  '--ahrs=accels=(0 2 4 6 8),magnetometers=(1 3 5 7),period=.5'\n"
+    "  Create an ahrs which only uses accels and magnetometers\n"
     "  '--ahrs=gyroscopes=()'\n")
    #f))
 
@@ -184,9 +184,9 @@
   (least-squares-iterate (matrix-transpose (matrix '((0 1 -1 1 1 1 1 1 0 0 0 0))))
                          build-quad-jacobian-residual-row quad-complete? 10))
 
-(computation-register 'force 
-                      (string-append "The magtitude of the accelerometers combined force, "
+(computation-register 'accel-force 
+                      (string-append "The magtitude of the accels combined force, "
                                      "non-moving yields 1 (for 1 gravity)")
-                      '(accelerometer)
+                      '(accel)
                       (lambda ()
-                        (magnitude (sensor-query 'accelerometer))))
+                        (magnitude (sensor-query-indexes 'accel '(0 1 2)))))

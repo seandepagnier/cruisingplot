@@ -56,6 +56,19 @@
 (define (phase-resolve-positive-degrees phase)
   (r2d (phase-resolve-positive (d2r phase))))
 
+; calculate heading difference, if p2 is false
+; there is no difference (for initial conditions)
+(define (phase-difference p1 p2 period)
+  (if p2
+      (let eachd ((d (- p1 p2)))
+        (cond ((> d (/ period 2)) (eachd (- d period)))
+              ((< d (- (/ period 2))) (eachd (+ d period)))
+              (else d)))
+      0))
+
+(define (phase-difference-degrees p1 p2)
+  (phase-difference p1 p2 360))
+
 (define (newtons-method state build-jacobian-residual-row iterations)
   (let each-iteration ((state state)
                        (iteration 0))

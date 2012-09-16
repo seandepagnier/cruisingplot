@@ -19,7 +19,7 @@
 
 (define (update-history)
   (let ((cur-time (computation-calculate 'time))
-        (value (computation-calculate 'accelerometer.5)))
+        (value (computation-calculate 'accel.5)))
     (if value
         (set! tilt-history
               (cons (list cur-time value)

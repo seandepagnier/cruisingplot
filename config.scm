@@ -22,10 +22,10 @@
 
 (define opts
  (list
-  (args:make-option (a ahrs) (optional: "OPTIONS") "Create an ahrs which runs kalman filter algorithms.  Invoke -a help for more information."
-                    (make-ahrs-from-string arg))
-  (args:make-option (A autopilot) (optional: "OPTIONS") "Create an autopilot"
+  (args:make-option (a autopilot) (optional: "OPTIONS") "Create an autopilot"
                     (create-autopilot arg))
+  (args:make-option (A ahrs) (optional: "OPTIONS") "Create an ahrs which runs kalman filter algorithms.  Invoke -a help for more information."
+                    (make-ahrs-from-string arg))
   (args:make-option (C config) (required: "FILENAME") "include a config file which contentss specifies command line options"
                     (with-input-from-file arg
                       (lambda ()
@@ -55,7 +55,7 @@
   (args:make-option (i input) (required: "FILENAME,options")
                     "Use a file with sensor data as input (replay), -i help for info"
                     (sensor-replay-logfile arg))
-  (args:make-option (m magnetometer)   (required: "DEVICE") "device or url for mag data."
+  (args:make-option (m magnetometer)   (optional: "OPTIONS") "automatically perform calibration on the magnetic sensors. -m help for info"
                     (magnetometer-setup arg))
   (args:make-option (o output) (required: "FILENAME")
                     "Write all input sensor data to a log file log for future replay"
@@ -68,7 +68,10 @@
                                  (sleep 1)
                                  (plots-setup plots)))
                     (set! plots (append plots `(,(lambda () (create-plot-from-string arg))))))
-  (args:make-option (s server) (optional: "PORT")
+  (args:make-option (s serial) (optional: "DEVICE")
+                    "read from a serial port for sensor input"
+                    (generic-serial-sensor-reader arg))
+  (args:make-option (S server) (optional: "PORT")
                     (string-append "Run a server listening on the specified port or "
                                    (number->string net-default-port)
                                    " by default")
