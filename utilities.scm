@@ -117,9 +117,36 @@
             (set! run #t)
             (proc))))))
 
+(define (scientific-notation x)
+  (if (negative? x)
+      (display "-"))
+  (let helper ((x (abs x)) (exp 0))
+    (cond ((>= x 10)
+           (helper (/ x 10) (+ exp 1)))
+          ((< x 1)
+           (helper (* x 10) (- exp 1)))
+          (else (list x exp)))))
+
+(define (display-scientific-notation-places x places)
+  (let ((s (scientific-notation x)))
+    (display (round-to-places (first s) places))
+    (cond ((not (zero? (second s)))
+           (display "e")
+           (display (second s))))))
+
 (define (round-to-places n places)
-  (let ((factor (expt 10 places)))
-    (/ (round (* n factor)) factor)))
+  (if n (let ((factor (expt 10 places)))
+          (/ (round (* n factor)) factor))
+      #f))
+
+(define (map-round-to-places l places)
+  (cond ((not l) #f)
+        ((null? l) '())
+        ((string? l) l)
+        ((number? l) (round-to-places l places))
+        ((list? l) (cons (map-round-to-places (car l) places)
+                         (map-round-to-places (cdr l) places)))
+        (else (error "unhandled type to map-round-to-places" l))))
 
 (define (saturate value minimum maximum)
   (min minimum (max maximum value)))
@@ -200,3 +227,9 @@
 
 (define (zero-if-false value)
   (if value value 0))
+
+(define (first-if-true value)
+  (if value (first value) value))
+
+(define (random-in-range start end)
+  (+ start (/ (* (- end start) (random 100001)) 100000)))

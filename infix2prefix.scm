@@ -73,14 +73,16 @@
                         (else (scan-exp x (list (cons op args)) (cdr exp))))
                   (scan-exp x args (cdr exp)))
               (error "Expected operator")))))
+
   (define (scan-exp op args exp)
 ;    (print "scan-exp " op " " args " " exp)
     (if (and (eq? op '-) (null? exp))
         (list (cons '- (if (= (length args) 1) args (list (cons '+ args)))))
         (let ((x (car exp)))
-          (cond ((pair? x) (scan-op op (append args (list (infix->prefix x))) (cdr exp)))
+          (cond ((pair? x) (scan-op op (append (list (infix->prefix x)) args) (cdr exp)))
                 ((operator? x) (error "Unexpected operator"))
                 (else (scan-op op (append (list x) args) (cdr exp)))))))
+
   (let ((expr (car (scan-exp #f '() (reverse exp)))))
     (if (car expr) expr (cadr expr))))
 

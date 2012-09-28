@@ -1,4 +1,4 @@
-;; Copyright (C) 2011 Sean D'Epagnier <sean@depagnier.com>
+;; Copyright (C) 2011, 2012 Sean D'Epagnier <sean@depagnier.com>
 ;;
 ;; This Program is free software; you can redistribute it and/or
 ;; modify it under the terms of the GNU General Public
@@ -14,11 +14,11 @@
 (define (create-autopilot arg)
   (define options
     (create-options
-     `(,(make-number-verifier 'period "how fast to reach course in seconds" 5 1 10)
-       ,(make-number-verifier 'damping-factor "damping factor, 1 for critical" 1 0 10)
+     `(,(make-number-verifier 'period "how fast to reach course in seconds" 10 1 20)
+       ,(make-number-verifier 'dampening-factor "dampening factor, 1 for critical" 1 0 10)
        ,(make-unspecified-number-verifier 'heading "compass heading to hold, 0-360 or -1 for current" #f 0 360)
        )
-     "-autopilot heading=90,period=5,damping-factor=.8"
+     "-autopilot heading=90,period=5,dampening-factor=.8"
      (create-motor-options)))
 
   (parse-basic-options-string options arg)
@@ -27,43 +27,113 @@
         (motor (motor-open options))
         (last-heading #f)
         (last-heading-rate #f)
-        (desired-heading (options 'heading)))
+        (desired-heading (options 'heading))
+        (w-history '())
+        (heading-history '())
+        (gain-h 2)
+        (gain-r 6))
+
+    ; read from sensors at 10hz
+  (create-periodic-task
+   "autopilot-sensor-reader" .1
+   (lambda ()
+     (let ((accel (sensor-query-indexes 'accel '(0 1 2)))
+           (mag (sensor-query-indexes 'mag '(0 1 2))))
+       ; look for period of 1-10 seconds in accelerometer force
+       ; by logging last 100 points
+       (if (not (any not mag))
+           (let ((f 
+                  (list accel mag)
+                  ))
+             (set! w-history
+                   (append (if (>= (length w-history) 30)
+                               (cdr w-history)
+                               w-history)
+                           (list (list (elapsed-seconds) f))))
+             )
+           ))))
 
   (create-periodic-task
-   "autopilot" 1
+   "autopilot-update" 1
    (lambda ()
-     (let ((heading (computation-calculate 'magnetic-heading)))
+     (let ((heading (heading-from-history-1 w-history)))
        (cond ((not heading) (print "autopilot is waiting for magnetic heading update"))
              (else
               (if (not desired-heading)
                   (set! desired-heading heading))
+              (if (not last-heading)
+                (set! last-heading heading))
+              (if (not last-heading-rate)
+                (set! last-heading-rate 0))
               (let*((heading-error (phase-difference-degrees heading desired-heading))
                     (heading-rate (phase-difference-degrees heading last-heading))
                     (heading-rate-rate (phase-difference-degrees heading-rate last-heading-rate)))
-                
-                (print "heading " heading "heading-error " heading-error
-                       " heading-rate " heading-rate
-                       " heading-rate-rate " heading-rate-rate)
+                (print "heading " (round-to-places heading 2)
+                       " h-1-2- " (round-to-places (- heading (heading-from-history-2 w-history)) 2)
+                       " heading-error " (round-to-places heading-error 2)
+                       " heading-rate " (round-to-places heading-rate 2)
+                       " heading-rate-rate " (round-to-places heading-rate-rate 2))
 
                 (set! last-heading heading)
                 (set! last-heading-rate heading-rate)
 
-                (if (and (> (abs heading-error) 3) (> (abs heading-rate) 3))
-                    (set! gain
-                          (compute-autopilot-gain heading-error heading-rate
-                                                  heading-rate-rate (options 'period))))
+                ; error and rate must not be zero for feedback..
+                ; we are already perfect in this case
+                (if (not (and (zero? heading-error) (zero? heading-rate)))
+                    (set! heading-history
+                          (append (if (>= (length heading-history) 30)
+                                      (cdr heading-history)
+                                      heading-history)
+                                  (list (list heading-error heading-rate heading-rate-rate)))))
+                                        ; h'' + 2 c w h' + w^2 h = 0
+                                        ; m = a h' + b h
 
+                ; update gains
+                (let* ((d (calculate-dampening-factor heading heading-rate
+                                                     heading-rate-rate (options 'period)))
+                       (dd (/ (- (options 'dampening-factor) d) 100))
+                       (dr (cond ((< dd -1e-1) -1e-1)
+                                 ((> dd 1e-1) 1e-1)
+                                 (else dd))))
+                  (print " d " d " dd " dd " dr " dr)
+                  (if (> (abs heading-error) (abs heading-rate))
+                      (set! gain-h (+ gain-h dr))
+                      (set! gain-r (+ gain-r dr)))
+                  (print "new gain gain-h " gain-h " gain-r " gain-r)
+                  (cond ((> gain-h 10) (set! gain-h 10))
+                        ((< gain-h 1) set! gain-h 1))
+                  (cond ((> gain-r 10) (set! gain-r 10))
+                        ((< gain-r 1) (set! gain-r 1))))
+             
+                ; command motor
+                (let ((command (+ (* gain-h heading-error)
+                                  (* gain-r heading-rate))))
+                  (print "command " command)
                 (motor-command-velocity motor
-                                        (calculate-filter-command
-                                         heading-error heading-rate
-                                         (options 'period) (options 'damping-factor)
-                                         .1 ;gain
-                                         ))))))))))
+                                        command))))))))))
 
+(define (heading-from-history-1 w-history)
+  (let ((history-sum
+         (fold (lambda (a b) (list (map + (first a) (first b))
+                                   (map + (second a) (second b))))
+               '((0 0 0) (0 0 0)) (map second w-history)))
+        (l (length w-history)))
+    (if (zero? l) #f
+    (let ((accel (map (lambda (h) (/ h l)) (first history-sum)))
+          (mag (map (lambda (h) (/ h l)) (second history-sum))))
+      (magnetometer-heading accel mag)))))
 
-(define windvane-control-port #f)
-(define (set-windvane-control-port! port)
-  (set! windvane-control-port port))
+(define (heading-from-history-2 w-history)
+  (let ((history (map second w-history))
+        (l (length w-history)))
+    (if (zero? l) #f)
+    (/ (fold + 0 (map magnetometer-heading
+                      (map first history)
+                      (map second history))) l)))
+
+;(define windvane-control-port #f)
+;(define (set-windvane-control-port! port)
+;  (set! windvane-control-port port))
 
 ; h'' + 2 c w h' + w^2 h = 0
 ;
@@ -86,16 +156,16 @@
 ; command autopilot based on h''
 ;
 ; command = -gain(2 c w h' + w^2 h)
-(define (calculate-filter-command heading-error heading-rate period damping-factor gain)
-;  (print "args " heading-error " " heading-rate " " period " " damping-factor " " gain)
+(define (calculate-filter-command heading-error heading-rate period dampening-factor gain)
+;  (print "args " heading-error " " heading-rate " " period " " dampening-factor " " gain)
   (let ((w (/ period))
-        (c damping-factor))
+        (c dampening-factor))
     (- (* gain (+ (* 2 c w heading-rate) (* (square w) heading-error))))))
 
 ; update gain to reach critical dampening
-(define (compute-autopilot-gain heading-error heading-rate heading-rate-rate period)
+(define (compute-autopilot-gain heading-error heading-rate heading-rate-rate period gain)
   (let ((df (calculate-dampening-factor heading-error heading-rate
-                                        heading-rate-rate ))
+                                        heading-rate-rate period))
         (lp .1))
     (let ((newfac (cond ((> df 1.1) 1.02)
                         ((< df .9)   .98)
@@ -113,63 +183,3 @@
 ; in the same feedback loop
 ; 
 
-Using redundant sensors we can compute calibration coefficients.
-Assuming there is an overall scale factor already taken out (you can
-see how this would be impossible to calculate anyway because its
-multiplied by all the sensors)
-
-Each redundant sensor provides a truth equation which can be used
-to determine one more than the dimensions additional unknowns.
-
-sensor measurements are (A, B, C etc..)
-sensor biases are (Ab, Bb, Cb... etc)
-calibration coefficients (a, b, c etc...)
-true value for dimension (X, Y, Z)
-
-For 3 accelerometers all in 1 dimensions:
-
-A = X + Ab
-B = a*X + Bb
-C = b*X + Cb
-
-Each new sensor addes 2 unknowns and also can
-be used to solve 2 unknowns.  With 3 sensors,
-2 are redundant and allow us to solve for 4
-unknowns, there are 5 unknowns, so one bias
-cannot be calculated, always have 1 unknown
-
-
-For 2 dimensions with 4 sensors:
-A = X+Ab
-B = a*X + b*Y + Bb
-C = c*X + d*Y + Cb
-D = e*X + f*Y + Db
-
-Possible to calculate 6 unknowns, or a-f, but no biases
-With an additional sensor:
-E = g*X + h*Y + Eb
-we now get a-h as well as 1 bias.
-
-With more sensors we will always have 4 unknowns, one must
-be a bias, but we can spread the others freely.
-
-With 3 dimensions and 9 sensors:
-
-A = X+Ab
-B = a*X + b*Y + Bb
-C = c*X + d*Y + e*Z + Cb
-D = f*X + g*Y + h*Z + Db
-E = i*X + j*Y + k*Z + Eb
-F = l*X + m*Y + n*Z + Fb
-G = o*X + p*Y + q*Z + Gb
-H = r*X + s*Y + t*Z + Hb
-I = u*X + v*Y + w*Z + Ib
-
-can find all 24 unknowns (a-w) (4 per redundant axis) as well as overall error term (one bias)
-There no matter how many sensors there will be 8 unknowns for 3 dimensions
-
-If it is possible to determine bias from some other means, we can completely calibrate sensors in 3d as long as there are at least 8 linearly independant axes.  More axes may increase accuracy and/or give error feedback to bias estimation.
-
-In the simpler case of only 4 axes, it is possible to compute 3 of the biases as well as 1 other term if all the other calibration terms are known.. since only bias terms change over time, once the calibration terms are well-estimated, it should be possible to use this method to calculate all biases except 1.
-
-It also should be possible to find all non-linearities iteratively since each redundant axis would allow for much more than only 4 unknowns.

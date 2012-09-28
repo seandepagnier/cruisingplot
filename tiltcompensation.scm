@@ -79,42 +79,149 @@
 ; dZ/dX[1] = -2*X[0]*Pi*time*cos(2*Pi*time/X[1]+X[2])/X[1]^2;
 ; dZ/dX[2] = X[0]*cos(2*Pi*time/X[1]+X[2])
 ; dZ/dX[3] = 1;
-(define (build-tilt-jacobian-residual-row state measurements)
-    (let ((X0 (matrix-ref state 0 0)) (X1 (matrix-ref state 1 0))
-          (X2 (matrix-ref state 2 0)) (X3 (matrix-ref state 3 0)))
+(define (build-tilt-jacobian-residual-row state measurement)
+  (let ((time (first measurement))
+        (value (second measurement)))
+    (let ((X0 (first state)) (X1 (second state))
+          (X2 (third state)) (X3 (fourth state)))
       `((,(sin (+ (* 2 Pi time (/ X1)) X2))
          ,(* -2 Pi X0 time (cos (+ (* 2 Pi time (/ X1)) X2)) (/ X1) (/ X1))
          ,(* X0 (cos (+ (* 2 Pi time (/ X1)) X2)))
          ,1)
-        ,(- value (* X0 (sin (+ (* 2 Pi time (/ X1)) X2))) X3))))
+        ,(- value (* X0 (sin (+ (* 2 Pi time (/ X1)) X2))) X3)))))
 
-(define (tilt-complete? state)
+; States:  frequency, phase, bias
+; measurement
+; Z = sin(2*Pi * time * X[0] + X[1]) + X[2];
+; partials:
+; dZ/dX[0] = 2*Pi*time*cos(2*X[0]*Pi*time+X[1])
+; dZ/dX[1] = cos(2*Pi*time*X[0]+X[1])
+; dZ/dX[2] = 1;
+(define (build-fpb-jacobian-residual-row state measurement)
+  (let ((time (first measurement))
+        (value (second measurement)))
+    (let ((X0 (first state)) (X1 (second state)) (X2 (third state)))
+      `((,(* 2 Pi time (cos (+ (* 2 Pi time X0) X1)))
+         ,(* (cos (+ (* 2 Pi time X0) X1)))
+         ,1)
+        ,(- value (* (sin (+ (* 2 Pi time X0) X1))) X2)))))
+
+
+; States:  frequency, phase
+; Measurement:  Z = amplitude*sin(2*Pi * time * X[0] + X[1]) +bias
+; partials:
+; dZ/dX[0] = amplitude*2*Pi*time*cos(2*X[0]*Pi*time+X[1])
+; dZ/dX[1] = amplitude*cos(2*Pi*time*X[0]+X[1])
+(define (compute-frequency-phase start amplitude bias data)
+  (least-squares-iterate start
+  (lambda (state measurement)
+    (let ((time (first measurement))
+          (value (second measurement)))
+      (let ((X0 (first state)) (X1 (second state)))
+        `((,(* amplitude 2 Pi time (cos (+ (* 2 Pi time X0) X1)))
+           ,(* amplitude (cos (+ (* 2 Pi time X0) X1))))
+          ,(- value (* amplitude (sin (+ (* 2 Pi time X0) X1))) bias)))))
+        data #f 10))
+
+; States:  amplitude, frequency, phase, bias
+; Measurement: Z = X[0]*sin(2*Pi * time * X[1] + X[2]) + X[3];
+; partials:
+; dZ/dX[0] = sin(2*Pi*time*X[1]+X[2])
+; dZ/dX[1] = 2*X[0]*Pi*time*cos(2*X[1]*Pi*time+X[2])
+; dZ/dX[2] = X[0]*cos(2*Pi*time*X[1]+X[2])
+; dZ/dX[3] = 1;
+(define (compute-amplitude-frequency-phase-bias start data)
+  (least-squares-iterate start
+  (lambda (state measurement)
+    (let ((time (first measurement))
+          (value (second measurement)))
+      (let ((X0 (first state)) (X1 (second state))
+            (X2 (third state)) (X3 (fourth state)))
+        `((,(sin (+ (* 2 Pi time X1) X2))
+           ,(* 2 Pi X0 time (cos (+ (* 2 Pi time X1) X2)))
+           ,(* X0 (cos (+ (* 2 Pi time X1) X2)))
+           ,1)
+          ,(- value (* X0 (sin (+ (* 2 Pi time X1) X2))) X3)))))
+  data #f 10))
+
+(define (eor x y)
+  (cond ((and x y) #f)
+        ((or x y) #t)
+        (else #f)))
+
+; from data and given frequency lock on
+(define (calculate-wave data start-frequency)
+    (let* ((rawdata (map second data))
+           (minval (apply min rawdata))
+           (maxval (apply max rawdata)))
+      (let ((amplitude (/ (- maxval minval) 2))
+            (bias (apply average rawdata)))
+        (let*((frequency-phase-run (compute-frequency-phase
+                                    `(,start-frequency 0) amplitude bias data))
+              (frequency-phase (first frequency-phase-run)))
+          (let*((amplitude-frequency-phase-bias-run
+                 (compute-amplitude-frequency-phase-bias
+                  `(,amplitude
+                    ,(first frequency-phase)
+                    ,(second frequency-phase)
+                    ,bias) data))
+                (amplitude (first (first amplitude-frequency-phase-bias-run)))
+                (frequency (second (first amplitude-frequency-phase-bias-run)))
+                (phase (third (first amplitude-frequency-phase-bias-run)))
+                (bias (fourth (first amplitude-frequency-phase-bias-run)))
+                (error (second amplitude-frequency-phase-bias-run)))
+            (list (list (abs amplitude) (abs frequency) (if (eor (negative? amplitude) (negative? frequency))
+                                                            (+ pi phase) phase) bias)
+                  error))))))
+
+; find wave from data using least squares
+(define (find-wave data min-period max-period)
+  (let each-wave ((best-wave #f)
+                  (period min-period))
+    (if (< period max-period)
+        (each-wave
+         (let ((wave (calculate-wave data (/ period))))
+           (let ((period (/ (second (first wave)))))
+             (if  (and (or (not best-wave)
+                           (< (second wave) (second best-wave)))
+;                       (> period min-period)
+;                       (< period max-period)
+                       )
+                 wave best-wave)))
+         (* period 2))
+        (if best-wave
+        (let ((amplitude (first (first best-wave)))
+              (frequency (second (first best-wave)))
+              (phase (third (first best-wave)))
+              (bias (fourth (first best-wave)))
+              (error (second best-wave)))
+          `((,amplitude ,(/ frequency) ,(phase-resolve phase) ,bias) ,error))
+        #f))))
+
+
+(define (tilt-complete? state update)
       ; force phase to be from -Pi to Pi
-      (matrix-set! state 2 0 (phase-resolve (matrix-ref state 2 0)))
+      (set-car! (cddr state) (phase-resolve (third state)))
 
       ; force amplitude to be positive by flipping period and phase
-      (cond ((negative? (matrix-ref state 0 0))
-             (matrix-set! state 0 0 (- (matrix-ref state 0 0)))
-             (matrix-set! state 1 0 (- (matrix-ref state 1 0)))
-             (matrix-set! state 2 0 (- (matrix-ref state 2 0)))))
+      (cond ((negative? (first state))
+             (set-car! state (- (first state)))
+             (set-cdr! state `(,(- (second state))
+                               ,(- (third state))
+                               ,(fourth state)))))
 
-      ; force period to be > 3
-      (cond ((< (matrix-ref state 1 0) 3)
-             (matrix-set! state 1 0 3)))
+      (< update 1e-4))
 
-      (let ((d (matrix-ref (matrix* (matrix-transpose state) state) 0 0)))
-        (verbose "d: " d)
-        (< d 1e-1)))
-
-(define (compute-amplitude-period-phase-bias-least-squares)
-  (let* ((rawdata (map second tilt-history))
+; don't bother with amplitude first, just find frequency
+(define (compute-frequency-phase-bias-least-squares data start-frequency)
+  (let* ((rawdata (map second data))
          (minval (apply min rawdata))
          (maxval (apply max rawdata))
          (avgval (apply average rawdata)))
-    (least-squares-iterate (matrix `((,(- maxval minval)) (1) (1) (,avgval)))
-                           10 tilt-constraints tilt-finished?
-                           built-tilt-jacobian-row build-tilt-residual-row)))
-
+    (least-squares-iterate `(,start-frequency 0 ,avgval)
+                           build-tilt-jacobian-residual-row
+                           (map (lambda (d) (/ d (- maxval minval) .5) data))
+                           #f 10)))
 
 ;  Truth equation
 ;  measurement = amplitude*sin( 2*Pi*time / period + phase) + bias
@@ -209,7 +316,6 @@
   (if (> from to) '() (cons from (apply sequence (+ from (if (null? step) 1 (car step))) to step))))
 
 (define i (sqrt -1))
-(define (square x) (* x x))
 
 (define (discrete-fourier-transform data)
   (let ((N (length data)))

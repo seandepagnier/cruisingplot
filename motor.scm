@@ -16,7 +16,7 @@
    `(,(make-string-verifier 'motordevice "serial device of motor" "none")
      ,(make-baud-verifier 'serialbaud "serial baud rate to use" 9600)
      ,(make-number-verifier 'min-motor-duty "minimum duty cycle" 0 0 1)
-     ,(make-number-verifier 'max-motor-duty "maximum duty cycle" .2 0 1)
+     ,(make-number-verifier 'max-motor-duty "maximum duty cycle" 1.5 0 10)
      )
   "no examples" #f))
 

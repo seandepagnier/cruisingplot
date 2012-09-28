@@ -170,13 +170,13 @@ extern void libgps_read(struct gps_data_t *data, double results[6]);
         (warning "geomag70 failed"))
     results))
 
-(computation-register 'magnetic-declination "The declination of the magnetic field, calculated from gps position, and date" '(gps)
+(computation-register 'gps-magnetic-declination "The declination of the magnetic field, calculated from gps position, and date" '(gps)
                       (lambda () (f64vector-ref (compute-gps-IGRF) 0)))
 
-(computation-register 'magnetic-inclination "The inclination of the magtitude of the field, calculated from gps position, or with no gps, measured from angle of magnetometer and accelerometer"  '(gps)
+(computation-register 'gps-magnetic-inclination "The inclination of the magtitude of the field, calculated from gps position, or with no gps, measured from angle of magnetometer and accelerometer"  '(gps)
                       (lambda () (f64vector-ref (compute-gps-IGRF) 1)))
 
-(computation-register 'magnetic-fieldstrength "The declination of the magnetic field, calculated from gps position, and date" '(gps)
+(computation-register 'gps-magnetic-fieldstrength "The declination of the magnetic field, calculated from gps position, and date" '(gps)
                       (lambda () (f64vector-ref (compute-gps-IGRF) 6)))
 
 (define gps-plot #f)

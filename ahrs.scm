@@ -190,3 +190,64 @@
                       '(accel)
                       (lambda ()
                         (magnitude (sensor-query-indexes 'accel '(0 1 2)))))
+
+;Using redundant sensors we can compute calibration coefficients.
+;Assuming there is an overall scale factor already taken out (you can
+;see how this would be impossible to calculate anyway because its
+;multiplied by all the sensors)
+;
+;Each redundant sensor provides a truth equation which can be used
+;to determine one more than the dimensions additional unknowns.
+;
+;sensor measurements are (A, B, C etc..)
+;sensor biases are (Ab, Bb, Cb... etc)
+;calibration coefficients (a, b, c etc...)
+;true value for dimension (X, Y, Z)
+;
+;For 3 accelerometers all in 1 dimensions:
+;
+;A = X + Ab
+;B = a*X + Bb
+;C = b*X + Cb
+;
+;Each new sensor addes 2 unknowns and also can
+;be used to solve 2 unknowns.  With 3 sensors,
+;2 are redundant and allow us to solve for 4
+;unknowns, there are 5 unknowns, so one bias
+;cannot be calculated, always have 1 unknown
+;
+;
+;For 2 dimensions with 4 sensors:
+;A = X+Ab
+;B = a*X + b*Y + Bb
+;C = c*X + d*Y + Cb
+;D = e*X + f*Y + Db
+;
+;Possible to calculate 6 unknowns, or a-f, but no biases
+;With an additional sensor:
+;E = g*X + h*Y + Eb
+;we now get a-h as well as 1 bias.
+;
+;With more sensors we will always have 4 unknowns, one must
+;be a bias, but we can spread the others freely.
+;
+;With 3 dimensions and 9 sensors:
+;
+;A = X+Ab
+;B = a*X + b*Y + Bb
+;C = c*X + d*Y + e*Z + Cb
+;D = f*X + g*Y + h*Z + Db
+;E = i*X + j*Y + k*Z + Eb
+;F = l*X + m*Y + n*Z + Fb
+;G = o*X + p*Y + q*Z + Gb
+;H = r*X + s*Y + t*Z + Hb
+;I = u*X + v*Y + w*Z + Ib
+;
+;can find all 24 unknowns (a-w) (4 per redundant axis) as well as overall error term (one bias)
+;There no matter how many sensors there will be 8 unknowns for 3 dimensions
+;
+;If it is possible to determine bias from some other means, we can completely calibrate sensors in 3d as long as are at least 8 linearly independant axes.  More axes may increase accuracy and/or give error feedback to bias estimation.
+;
+;In the simpler case of only 4 axes, it is possible to compute 3 of the biases as well as 1 other term if all the other calibration terms are known.. since only bias terms change over time, once the calibration terms are well-estimated, it should be possible to use this method to calculate all biases except 1.
+;
+;It also should be possible to find all non-linearities iteratively since each redundant axis would allow for much more than only 4 unknowns.

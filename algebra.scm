@@ -30,6 +30,8 @@
   (apply + (apply map * vecs)))
 
 (define average (lambda args (/ (fold + 0 args) (length args))))
+(define average-list (lambda (arg) (/ (fold + 0 arg) (length arg))))
+
 (define rms (lambda args (sqrt (apply average (map square args)))))
 
 (define Pi (* 2 (asin 1)))

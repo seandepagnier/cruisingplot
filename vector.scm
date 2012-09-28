@@ -32,6 +32,12 @@
 (define (vector-dot . vecs)
   (apply + (apply map * vecs)))
 
+(define (random-normalized-vector dim)
+  (vector-normalize
+   (let loop ((dim dim))
+       (if (zero? dim) '() (cons (random-in-range -1 1)
+                                 (loop (- dim 1)))))))
+
 ; we support all dimensions of cross products
 ; 1 2d vector given will yield an orthogonal vector
 ; two 3d vectors can be supplied to gain a third orthogonal, or

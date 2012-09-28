@@ -45,7 +45,7 @@
           (for-each (lambda (l) (if (not (= m (length l)))
                                     (error "non-rectangular lists in matrix")))
                     (cdr l))
-          (vector->matrix n m (apply f64vector (apply append l)))))))
+          (vector->matrix n m (list->f64vector (fold append '() l)))))))
 
 (define (matrix-identity r . c)
   (if (null? c)
@@ -149,10 +149,10 @@
         ((= (matrix-rows m) 1) (matrix-ref m 0 0))
         (else
          (let ((n (matrix-remove-row m 0)))
-           (apply + (map (lambda (col)
-                           (* (if (even? col) 1 -1) (matrix-ref m 0 col)
-                              (matrix-determinant (matrix-remove-col n col))))
-                         (sequence 0 (- (matrix-cols m) 1))))))))
+           (fold + 0 (map (lambda (col)
+                            (* (if (even? col) 1 -1) (matrix-ref m 0 col)
+                               (matrix-determinant (matrix-remove-col n col))))
+                          (sequence 0 (- (matrix-cols m) 1))))))))
                   
 (define (matrix-inverse m)
   (if (not (matrix-square? m)) (error "cannot perform inverse on non-square matrix" m))

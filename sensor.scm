@@ -179,7 +179,7 @@
 
 (define (make-line-reader port proc)
   (create-periodic-task
-   (string-append "line reader for " (port->string port)) .05
+   (string-append "line reader for " (port->string port)) .02
    (lambda ()
      (let loop ()
        (if (char-ready? port)
@@ -234,7 +234,6 @@
        ,(make-baud-verifier 'baudrate "serial baud rate to use" 'none))
      "no examples" #f))
 
-  (print "arg " arg)
   (parse-basic-options-string options arg)
 
   (let ((i #f) (o #f)
@@ -267,7 +266,7 @@
      (lambda (line)
        (cond ((eof-object? line)
               (verbose "serial end of file: we will try to reconnect")
-              (connect-serialport)
+              (connect-serial-port)
               (cond ((not (and i o))
                      (for-each
                       (lambda (sensor)
@@ -276,8 +275,8 @@
                               (for-each (lambda (sensor-index)
                                           (sensor-update (list sensor
                                                                sensor-index) #f))
-                                        sensor-indexes)))
-                        possible-sensors))
+                                        sensor-indexes))))
+                        possible-sensors)
                      (task-sleep 1))))
              (else
               (let ((words (string-split line)))
@@ -300,4 +299,4 @@
                                                         (/ sensor-value (second sensor))))
                                        sensor-values (third sensor)))
                             (else
-                             (warning-once "unrecognized sensor: " sensor))))))))))))))
+                             (warning-once "unrecognized sensor: " words))))))))))))))
