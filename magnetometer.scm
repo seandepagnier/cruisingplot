@@ -13,8 +13,22 @@
 
 ; (load "utilities.scm") (load "leastsquares.scm") (load "vector.scm") (load "matrix.scm") (load "algebra.scm")
 
-(define accel-mag-3d-calibration #f)
+;(define accel-mag-3d-calibration #f)
+
+(define accel-mag-3d-calibration
+  '((1     0  0 1   0  0 0 1 0
+    1 0 0 0  0 1 0 0  0 0 1 0
+    .9) 1))
+
 (define calibration-measurements '())
+
+(define (recompute-calibration)
+  (if (> (length calibration-measurements) 10)
+      (set! accel-mag-3d-calibration
+            (calibrate-accel-mag-3d
+             (map (lambda (m)
+                    (append (second m) (third m)))
+                  calibration-measurements)))))
 
 (define (save-calibration filename)
   (cond ((not (equal? filename "none"))
@@ -42,7 +56,7 @@
   (map (lambda (measurement)
          (let ((time (first measurement))
                (accel (second measurement))
-               (mag   (third measurement)))
+               (mag (third measurement)))
            (cons time (apply-accel-mag-3d accel mag accel-mag-3d-calibration))))
        calibration-measurements))
 
@@ -55,52 +69,19 @@
          (cons (car measurement) (map normalize (cdr measurement))))
        calibrated-calibration-measurements))
 
-;c-calaccel: (1.005 -0.113 1.006 -0.036 0.989 0.016)
-;c-calmag  : (0.955 0.009 -0.067 -0.089 -0.046 0.873 0.047 0.631 -0.044 -0.088 1.254 -0.397)
-;c-caldip  : 68.188 err 0.433
+;c-calaccel: (1.008 -0.106 0.004 1.002 -0.043 -0.002 -0.001 1.006 0.02)
+;c-calmag  : (0.889 -0.049 -0.013 -0.165 -0.035 0.853 -0.002 0.476 -0.025 -0.051 0.961 -0.333)
+;c-caldip  : 67.046 err 0.044
 
-;c-calaccel: (1.001 -0.111 0.995 -0.037 1.006 0.009)
-;c-calmag  : (0.945 -0.046 -0.067 -0.147 -0.004 0.885 -0.025 0.653 0.006 -0.058 1.039 -0.303)
-;c-caldip  : 65.338 err 0.29
-
-;c-calaccel: (1.01 -0.091 0.99 -0.039 1.002 0.024)
-;c-calmag  : (0.948 -0.014 0.003 -0.131 -0.069 0.901 -0.004 0.679 -0.076 -0.079 1.111 -0.326)
-;c-caldip  : 66.111 err 0.379
-
-;c-calaccel: (1.029 -0.084 0.005 1.005 -0.034 -0.03 -0.022 0.985 0.03)
-;c-calmag  : (0.953 -0.057 0.012 -0.2 -0.013 0.901 -0.009 0.618 -0.026 -0.058 1.021 -0.311)
-;c-caldip  : 64.207 err 0.39
-
-;c-calaccel: (1.06 -0.079 -0.078 0.995 -0.069 -0.012 0.051 0.999 0.013)
-;c-calmag  : (0.996 0.035 -0.013 -0.131 -0.146 0.94 0.009 0.681 -0.027 -0.088 1.075 -0.339)
-;c-caldip  : 63.959 err 0.374
-
-
-
-(define (compute-culling-metric calibrated-measurement
-                                normalized-calibrated-measurement
-                                normalized-calibrated-calibration-measurements)
-  (let ((time (first calibrated-measurement))
-        (cal-accel (second calibrated-measurement))
-        (cal-mag (third calibrated-measurement))
-        (norm-cal-accel (second normalized-calibrated-measurement))
+(define (min-dist-cal-point normalized-calibrated-measurement
+                            normalized-calibrated-calibration-measurements)
+  (let ((norm-cal-accel (second normalized-calibrated-measurement))
         (norm-cal-mag (third normalized-calibrated-measurement)))
     (let each-minimum ((min-dist-accel #f)
                        (min-dist-mag #f)
                        (measurements normalized-calibrated-calibration-measurements))
       (cond ((null? measurements)
-             (if (or (not min-dist-accel) (not min-dist-mag))
-                 (error "min dist not achieved"))
-             (if (< (- (elapsed-seconds) time) 10)
-                 0
-                 (let ((ane (- 1 (magnitude cal-accel)))
-                       (mne (- 1 (magnitude cal-mag)))
-                       (dipe (+ (last (first accel-mag-3d-calibration))
-                               (dot norm-cal-accel norm-cal-mag))))
-;                   (print "ane " ane " mne " mne " dipe " dipe " mda " min-dist-accel " mdm " min-dist-mag)
-                   (if (or (> min-dist-accel .1) (> min-dist-mag .1))
-                       1e-5
-                       (+ (square ane) (square mne) (square dipe))))))
+             (list min-dist-accel min-dist-mag))
             (else
              (let ((cur-norm-cal-accel (second (car measurements)))
                    (cur-norm-cal-mag (third (car measurements))))
@@ -115,6 +96,29 @@
                                    (cdr measurements))
                      (each-minimum min-dist-accel min-dist-mag
                                    (cdr measurements))))))))))
+
+(define (compute-culling-metric calibrated-measurement
+                                normalized-calibrated-measurement
+                                normalized-calibrated-calibration-measurements)
+  (let ((time (first calibrated-measurement))
+        (cal-accel (second calibrated-measurement))
+        (cal-mag (third calibrated-measurement)))
+    (let-values (((min-dist-accel min-dist-mag)
+                  (apply values
+                         (min-dist-cal-point normalized-calibrated-measurement
+                                             normalized-calibrated-calibration-measurements))))
+      (if (or (not min-dist-accel) (not min-dist-mag))
+          (error "min dist not achieved"))
+      (if (< (- (elapsed-seconds) time) 10)
+          0
+          (let ((ane (- 1 (magnitude cal-accel)))
+                (mne (- 1 (magnitude cal-mag)))
+                (dipe (+ (last (first accel-mag-3d-calibration))
+                         (dot norm-cal-accel norm-cal-mag))))
+;            (print "ane " ane " mne " mne " dipe " dipe " mda " min-dist-accel " mdm " min-dist-mag)
+            (if (or (> min-dist-accel .15) (> min-dist-mag .15))
+                (/ (+ (square ane) (square mne) (square dipe)) 10)
+                (+ (square ane) (square mne) (square dipe))))))))
 
 (define (cull-calibration-measurements)
   (let*((calibrated-calibration-measurements (calibrated-calibration-measurements))
@@ -143,9 +147,21 @@
 (define (update-calibration-measurements accel mag options)
   (let ((measurement (list (elapsed-seconds) accel mag)))
     (cond ((not (or (any not accel) (any not mag)))
-           (add-measurement measurement)
-           (if (>= (length calibration-measurements) (options 'max-calibration-points))
-                   (cull-calibration-measurements))))))
+           (if accel-mag-3d-calibration
+               (let-values (((min-dist-accel min-dist-mag)
+                             (apply values
+                              (min-dist-cal-point
+                               (cons (car measurement)
+                                     (map normalize
+                                          (apply-accel-mag-3d accel mag
+                                                              accel-mag-3d-calibration)))
+                               (normalize-measurements (calibrated-calibration-measurements))))))
+;                 (print "min-dist-accel " min-dist-accel " min-dist-mag " min-dist-mag)
+                 (if (or (not min-dist-accel) (not min-dist-mag)
+                         (and (> min-dist-accel .01) (> min-dist-mag .01)))
+                     (add-measurement measurement))))
+             (if (>= (length calibration-measurements) (options 'max-calibration-points))
+                 (cull-calibration-measurements))))))
 
 (define (generate-calibration-measurements count v)
   (let ((sd 1.2) (abd .2) (acd .05) (mbd 1) (mcd .2))
@@ -209,12 +225,31 @@
                    (generate-calibration-measurement (first accel) (second accel) (third accel)
                                                      (first mag) (second mag) (third mag)))))))
          (sequence 1 count))))))
+
+(define (test-algorithms)
+  (let ((meas (generate-calibration-measurements 64 .5)))
+    (print "meas " (map-round-to-places meas 3))
+    (let ((cal (compute-accelerometer-calibration (map second meas))))
+      (print "accel-cal "  (map-round-to-places cal 3)))
+    (let ((cal (compute-magnetometer-calibration (map third meas))))
+      (print "mag-cal "  (map-round-to-places cal 3)))
+    (let ((cal (calibrate-sensor-3d (map second meas))))
+      (print "accel-sensor-cal "  (map-round-to-places cal 4)))
+    (let ((cal (calibrate-sensor-3d (map third meas))))
+      (print "mag-sensor-cal "  (map-round-to-places cal 4)))
+    (let ((cal (calibrate-basic-accel-mag-3d (map (lambda (m)
+                                                    (append (second m) (third m))) meas))))
+      (print "basic-accel-mag-cal "  (map-round-to-places cal 3)))
+    (let ((cal (calibrate-accel-mag-3d (map (lambda (m)
+                                              (append (second m) (third m))) meas))))
+      (print "accel-mag-cal "  (map-round-to-places cal 3)))
+    (exit 1)))
                       
 (define (magnetometer-setup arg)
-
   (define options
     (create-options
      `(,(make-number-verifier 'max-calibration-points "number of calibration points to use" 48 0 1000)
+       ,(make-boolean-verifier 'disable-updates "disable runnign calibration updates" 'false)
        ,(make-string-verifier 'calibration-file
                               "file to use for saving and loading calibration between runs" "magcal"))
      "currently the magnetometer supports the first 3 axes of accelerometer and magnetometer sensors"
@@ -223,26 +258,10 @@
   (parse-basic-options-string options arg)
   (load-calibration (options 'calibration-file))
 
+;  (test-algorithms)
+  (recompute-calibration)
 
-                  (cond (#f
-           (let ((meas (generate-calibration-measurements 64 .5)))
-;             (print "meas " (map-round-to-places meas 3))
-             (let ((cal (compute-accelerometer-calibration (map second meas))))
-               (print "accel-cal "  (map-round-to-places cal 3)))
-             (let ((cal (compute-magnetometer-calibration (map third meas))))
-               (print "mag-cal "  (map-round-to-places cal 3)))
-             (let ((cal (calibrate-sensor-3d (map second meas))))
-               (print "accel-sensor-cal "  (map-round-to-places cal 4)))
-             (let ((cal (calibrate-sensor-3d (map third meas))))
-               (print "mag-sensor-cal "  (map-round-to-places cal 4)))
-             (let ((cal (calibrate-basic-accel-mag-3d (map (lambda (m)
-                                                       (append (second m) (third m))) meas))))
-               (print "basic-accel-mag-cal "  (map-round-to-places cal 3)))
-             (let ((cal (calibrate-accel-mag-3d (map (lambda (m)
-                                                       (append (second m) (third m))) meas))))
-               (print "accel-mag-cal "  (map-round-to-places cal 3)))
-           (exit 1))
-           ))
+  (cond ((not (options 'disable-updates))
 
   (define accel-read '(0 0 0))
   (define default-accel-read-max '(-2 -2 -2))
@@ -274,40 +293,41 @@
 
   (let ((save-counter 0))
   (create-periodic-task
-   "magnetometer-calibration" 3
+   "magnetometer-calibration" 2
    (lambda ()
-     (if (> sensor-read-count 50)
+     (if (> sensor-read-count 5)
          (let ((accel-avg (vector-scale (/ sensor-read-count) accel-read))
                (mag-avg (vector-scale (/ sensor-read-count) mag-read)))
            (let ((accel-dev (magnitude (vector- accel-read-max accel-read-min)))
                  (mag-dev (magnitude (vector- mag-read-max mag-read-min))))
-             (print "accel-dev " accel-dev " mag-dev " mag-dev)
-             (cond ((and (< accel-dev .02) (< mag-dev .01))
-                    (print "update-cal " accel-avg " " mag-avg)
+;             (print "accel-dev " accel-dev " mag-dev " mag-dev)
+             (cond ((and (>= sensor-read-count 30) (< accel-dev .02) (< mag-dev .01))
+                    (print "update-cal " (map-round-to-places accel-avg 3)
+                           " " (map-round-to-places mag-avg 3))
                     (update-calibration-measurements accel-avg mag-avg options)))
-             (set! accel-read '(0 0 0))
-             (set! accel-read-max default-accel-read-max)
-             (set! accel-read-min default-accel-read-min)
-             (set! mag-read '(0 0 0))
-             (set! mag-read-max default-mag-read-max)
-             (set! mag-read-min default-mag-read-min)
-             (set! sensor-read-count 0))))
+             (cond ((or (>= sensor-read-count 30) (> accel-dev .02) (> mag-dev .01))
+                    (set! accel-read '(0 0 0))
+                    (set! accel-read-max default-accel-read-max)
+                    (set! accel-read-min default-accel-read-min)
+                    (set! mag-read '(0 0 0))
+                    (set! mag-read-max default-mag-read-max)
+                    (set! mag-read-min default-mag-read-min)
+                    (set! sensor-read-count 0))))))
 
      (let ((accel (map sensor-query (map (lambda (n) (list 'accel n)) '(0 1 2))))
            (mag (map sensor-query (map (lambda (n) (list 'mag n)) '(0 1 2)))))
 
        (cond ((>= (length calibration-measurements) 10)
-              
-              (let ((accel-cal (calibrate-sensor-3d (map second
-                                                         calibration-measurements))))
+              (let ((accel-cal (calibrate-sensor-3d (map second calibration-measurements))))
                 (verbose "accel-sensor-cal "  (map-round-to-places accel-cal 4)))
-              (let ((accel-cal (calibrate-sensor-3rd-order-3d (map second
-                                                                   calibration-measurements))))
+              (let ((accel-cal (calibrate-sensor-3rd-order-3d (map second calibration-measurements))))
                 (verbose "accel-sensor-3rd-order-cal "  (map-round-to-places accel-cal 4)))
-              
-              (set! accel-mag-3d-calibration (calibrate-accel-mag-3d (map (lambda (m)
-                                                                            (append (second m) (third m)))
-                                                                          calibration-measurements)))
+              (let ((mag-cal (calibrate-sensor-3d (map third calibration-measurements))))
+                (verbose "mag-sensor-cal "  (map-round-to-places mag-cal 4)))
+              (let ((mag-cal (calibrate-sensor-3rd-order-3d (map third calibration-measurements))))
+                (verbose "mag-sensor-3rd-order-cal "  (map-round-to-places mag-cal 4)))
+
+              (recompute-calibration)
 
               (if (and accel mag (not (any not accel)) (not (any not mag)))
                   (verbose "pitch " (round-to-places (computation-calculate 'pitch) 2)
@@ -338,7 +358,7 @@
                                      (* my (cos roll))
                                      (* -1 mz (sin roll) (cos pitch)))))
                           (let ((yaw (atan yh xh)))
-                 (verbose "cpitch " (round-to-places (accelerometer-pitch (first d)) 2)
+                 (print "cpitch " (round-to-places (accelerometer-pitch (first d)) 2)
                         " croll " (round-to-places (accelerometer-roll (first d)) 2)
                         " cyaw "  (round-to-places (apply magnetometer-heading d) 2)
                         " new-yaw " (round-to-places (rad2deg yaw) 2)
@@ -350,7 +370,7 @@
               (set! save-counter 0))
              (else
               (set! save-counter (+ save-counter 1))))
-       ))))
+       ))))))
 
 (computation-register 'pitch "The pitch derived from the accelerometer" '(accel)
                       (lambda ()

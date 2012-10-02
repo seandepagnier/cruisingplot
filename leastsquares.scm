@@ -520,7 +520,6 @@
              (cmz (+ (* r mx) (* s my) (* t mz) u)))
          (list (list cax cay caz) (list cmx cmy cmz)))))
 
-
 (define (calibrate-accel-mag-3d measurements)
   (let ((initial-accel (calibrate-sensor-3d
                         (map (lambda (measurement) (take measurement 3)) measurements)))
@@ -530,7 +529,7 @@
    (append
     (if (< (second initial-accel) 1)
         (first initial-accel)
-        '(1 0  1 0 0  1 0 0 0))
+        '(1 0  0 1 0  0 0 1 0))
     (if (< (second initial-mag) 1)
         (let ((im (first initial-mag)))
           (list (first im) 0 0 (second im) 0 (fourth im) 0 (fifth im) 0 0 (eighth im) (ninth im)))
