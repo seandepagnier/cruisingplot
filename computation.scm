@@ -44,6 +44,10 @@
                      (if (apply sensor-contains? (second data))
                            (print name " -- " (first data))))))
 
+; test if a computation is registered
+(define (computation-exists? name)
+  (hash-table-exists? computations name))
+
 ; shorthand way of reaching computations
 (define (computation-calculate name)
   (if (hash-table-exists? computations name)
@@ -51,6 +55,12 @@
         (if (apply sensor-contains? (second data))
             ((third data)) #f))
       (error "Cannot perform unregistered computation " name)))
+
+; if it doesn't exists return false
+(define (computation-calculate-exists name)
+  (if (computation-exists? name)
+      (computation-calculate name)
+      #f))
 
 ; return a thunk which evaluates a given expression which may use
 ; symbols which are registered computations which are evaluated and substituted

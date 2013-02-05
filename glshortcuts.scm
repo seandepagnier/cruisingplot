@@ -29,6 +29,13 @@
     (gl:Rotated ang x y z)
     (gl:MultMatrixf m)))
 
+(define (TranslateAfter x y z)
+  (let ((m (f32vector)))
+    (gl:GetFloatv gl:MODELVIEW_MATRIX m)
+    (gl:LoadIdentity)
+    (gl:Translated x y z)
+    (gl:MultMatrixf m)))
+
 (define (glVertex x y . zw)
   (if (null? zw)
       (gl:Vertex3d x y 0)

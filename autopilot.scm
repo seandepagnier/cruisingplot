@@ -7,161 +7,207 @@
 
 (declare (unit autopilot))
 
+; make && ./cruisingplot -v -swindvane-control  -ause-windvane  -d wind-vane
+
 ;  The goal is to keep the boat on course by measuring it's motion,
 ;  then estimating what the motion will be in the future with various
 ;  helm changes.
 
+(define desired-heading #f)
+(define sensor-history '())
+(define pitch-misalignment #f)
+
+(define gps-magnetic-declination #f)
+(define gps-magnetic-declination-timeout 0)
+
+(define (new-derivative-value initial-value)
+  (list initial-value 0 0))
+
+(define (update-derivative-value derivative value subtract-values)
+  (if (first derivative)
+      (let*((d (subtract-values value (first derivative)))
+            (dd (subtract-values d (second derivative))))
+        (list value d dd (fourth derivative)))
+      (list value 0 0 subtract-values)))
+                 
 (define (create-autopilot arg)
   (define options
     (create-options
      `(,(make-number-verifier 'period "how fast to reach course in seconds" 10 1 20)
        ,(make-number-verifier 'dampening-factor "dampening factor, 1 for critical" 1 0 10)
-       ,(make-number-verifier 'roll-round-up-factor "factor to change heading by with roll angle" .1 0 10)
+       ,(make-boolean-verifier 'use-windvane "use wind vane for primary feedback" 'false)
+       ,(make-boolean-verifier 'use-gps-heading "use gps instead of magnetic heading" 'false)
        ,(make-unspecified-number-verifier 'heading "compass heading to hold, 0-360 or -1 for current" #f 0 360)
        )
      "-autopilot heading=90,period=5,dampening-factor=.8"
      (create-motor-options)))
-
   (parse-basic-options-string options arg)
-
-  (let ((gain .1)
-        (motor (motor-open options))
-        (last-heading #f)
-        (last-heading-rate #f)
-        (desired-heading (options 'heading))
-        (w-history '())
-        (heading-history '())
-        (pitch-misalignment #f)
-        (gain-h 2)
-        (gain-r 6))
-
+  (set! desired-heading (options 'heading))
     ; read from sensors at 10hz and average
-  (create-periodic-task
-   "autopilot-sensor-reader" .1
-   (lambda ()
-     (let ((accel (sensor-query-indexes 'accel '(0 1 2)))
-           (mag (sensor-query-indexes 'mag '(0 1 2))))
-       (if (not (any not mag))
-           (let ((measurement (list accel mag)))
-             (set! w-history
-                   (append (if (>= (length w-history) 30)
-                               (cdr w-history) w-history)
-                           (list (cons (elapsed-seconds) measurement)))))
-           ))))
-
+  (create-periodic-task "autopilot-sensor-reader" .1 update-sensor-history)
+    (let ((heading (new-derivative-value #f)) (windvane (new-derivative-value #f))
+          (gain-h .03)                  (gain-r .02)
+          (pitch-tilt-angle 5)          (roll-round-up-factor 0)
+          (heading-history '())
+          (motor (motor-open options motor-command)))
   (create-periodic-task
    "autopilot-update" 1
-   (lambda ()
-     (let ((current-pitch (pitch-from-history-1 w-history))
-           (pc-w-history (history-cancel-pitch pitch-misalignment w-history)))
-                (print "current-pitch " current-pitch
-                       " pitch-misalignment " pitch-misalignment)
-       (set! pitch-misalignment
-             (if pitch-misalignment
-                 (+ (* .99 pitch-misalignment)
-                    (* .01 current-pitch))
-                 current-pitch))
-       (let ((heading1 (heading-from-history-1 pc-w-history))
-             (heading2 (heading-from-history-2 pc-w-history))
-             (roll1 (roll-from-history-1 pc-w-history)))
-       (cond ((not heading1) (print "autopilot is waiting for magnetic heading update"))
-             (else
-              (if (not desired-heading)   (set! desired-heading heading1))
-              (if (not last-heading)      (set! last-heading heading1))
-              (if (not last-heading-rate) (set! last-heading-rate 0))
-              (let*((heading-error (phase-difference-degrees
-                                    heading1 (- desired-heading
-                                                (* (options 'roll-round-up-factor) roll1))))
-                    (heading-rate (phase-difference-degrees heading1 last-heading))
-                    (heading-rate-rate (phase-difference-degrees heading-rate last-heading-rate)))
-                (print "heading " (round-to-places heading1 2)
-                       " h-1-2- " (round-to-places (phase-difference-degrees
-                                                    heading1 heading2) 2)
-                       " heading-error " (round-to-places heading-error 2)
-                       " heading-rate " (round-to-places heading-rate 2)
-                       " heading-rate-rate " (round-to-places heading-rate-rate 2))
-                (set! last-heading heading1)
-                (set! last-heading-rate heading-rate)
 
+   (lambda ()
+     (update-gps-declination)
+
+     (let*((pitch-compensated-sensor-history
+            (compensate-history-pitch sensor-history pitch-tilt-angle))
+           (heading1 (heading-from-history-1 pitch-compensated-sensor-history))
+           (heading2 (heading-from-history-2 pitch-compensated-sensor-history))
+           (roll (roll-from-history-1 pitch-compensated-sensor-history))
+           (gps-heading (computation-calculate-exists 'gps-heading))
+           (gps-magnetic-heading (if (and gps-heading gps-magnetic-declination)
+                                     (+ gps-heading gps-magnetic-declination) #f)))
+       (set! heading (update-derivative-value heading
+                                        (if (options 'use-gps-heading)
+                                            gps-magnetic-heading heading1)
+                                        phase-difference-degrees))
+       (set! windvane (update-derivative-value windvane (sensor-query 'windvane) -))
+     (cond ((options 'use-windvane)
+            (cond ((first windvane)
+                   (let ((data (map (lambda (s) (list (first s) (fourth s))) sensor-history)))
+                     (if (not (any not (map (lambda (x) (not (any not x))) data)))
+                         (let ((max-wave (find-wave data 2 17)))
+                           (print "max-wave " max-wave))))
+                   (let ((cmd (calc-windvane-command windvane heading gps-magnetic-heading)))
+                     (cond (windvane-control-port
+                            (write (* 100 cmd) windvane-control-port)
+                            (newline windvane-control-port)))
+                     (motor-command-velocity motor cmd)))
+                  (else (print "waiting on windvane input"))))
+           ((first heading)
+            (if (not desired-heading)   (set! desired-heading (first heading)))
+            (let*((heading-error (phase-difference-degrees
+                                  (first heading) (- desired-heading
+                                                     (if roll (* roll roll-round-up-factor) 0)))))
                 ; error and rate must not be zero for feedback..
                 ; we are already perfect in this case
-                (if (not (and (zero? heading-error) (zero? heading-rate)))
+                (if (not (and (zero? heading-error) (zero? (second heading))))
                     (set! heading-history
                           (append (if (>= (length heading-history) 30)
                                       (cdr heading-history)
                                       heading-history)
-                                  (list (list heading-error heading-rate heading-rate-rate)))))
-                                        ; h'' + 2 c w h' + w^2 h = 0
-                                        ; m = a h' + b h
-                ; update gains
-                (let* ((d (calculate-dampening-factor heading1 heading-rate
-                                                     heading-rate-rate (options 'period)))
-                       (dd (/ (- (options 'dampening-factor) d) 100))
-                       (dr (cond ((< dd -1e-1) -1e-1)
-                                 ((> dd 1e-1) 1e-1)
-                                 (else dd))))
-                  (print " d " d " dd " dd " dr " dr)
-                  (if (> (abs heading-error) (abs heading-rate))
-                      (set! gain-h (+ gain-h dr))
-                      (set! gain-r (+ gain-r dr)))
-                  (print "new gain gain-h " gain-h " gain-r " gain-r)
-                  (cond ((> gain-h 10) (set! gain-h 10))
-                        ((< gain-h 1) set! gain-h 1))
-                  (cond ((> gain-r 10) (set! gain-r 10))
-                        ((< gain-r 1) (set! gain-r 1))))
-             
-                ; command motor
-                (let ((command (+ (* gain-h heading-error)
-                                  (* gain-r heading-rate))))
-                  (print "command " command)
-                (motor-command-velocity motor command)))))))))))
+                                  (list (list heading-error (second heading) (third heading))))))
+                ; PID command = a*heading-error + b*accumulated-error + c*heading-rate
+                (let ((cmd (+ (* gain-h heading-error)
+                                                 (* gain-r (second heading)))))
+                  (cond (windvane-control-port
+                         (write (* 100 cmd) windvane-control-port)
+                         (newline windvane-control-port)))
+                  (motor-command-velocity motor cmd))))
+           (else (print "autopilot is waiting for heading update"))))))))
+
+(define (update-gps-declination)
+  (cond ((and (computation-exists? 'gps-heading) (or (not gps-magnetic-declination)
+                                                     (>= gps-magnetic-declination-timeout 1000)))
+         (set! gps-magnetic-declination (computation-calculate 'gps-magnetic-declination))
+         (set! gps-magnetic-declination-timeout 0))
+        (else
+         (set! gps-magnetic-declination-timeout
+               (+ gps-magnetic-declination-timeout 1)))))
+
+(define (compensate-history-pitch sensor-history pitch-tilt-angle)
+  (let ((current-pitch (pitch-from-history-1 sensor-history)))
+    (set! pitch-misalignment
+          (cond ((and current-pitch pitch-misalignment)
+                 (+ (* .99 pitch-misalignment)
+                    (* .01 current-pitch)))
+                (current-pitch current-pitch)
+                (else #f)))
+    (history-cancel-pitch (+ pitch-tilt-angle
+                             (if pitch-misalignment pitch-misalignment 0))
+                          sensor-history)))
+
+(define (update-sensor-history)
+  (let ((accel (sensor-query-indexes 'accel '(0 1 2)))
+        (mag (sensor-query-indexes 'mag '(0 1 2)))
+        (wind-vane (sensor-query 'windvane)))
+    (let ((measurement (list accel mag wind-vane)))
+      (set! sensor-history
+            (append (if (>= (length sensor-history) 120)
+                        (cdr sensor-history) sensor-history)
+                    (list (cons (elapsed-seconds) measurement)))))))
+
+(define (motor-command command)
+  (case command
+    ((port) (set! desired-heading
+                  (phase-difference-degrees desired-heading 3)))
+    ((port-long) (set! desired-heading
+                       (phase-difference-degrees desired-heading 15)))
+    ((starboard) (set! desired-heading
+                       (phase-difference-degrees desired-heading 3)))
+    ((starboard-long) (set! desired-heading
+                            (phase-difference-degrees desired-heading 15)))))
+
+
+(define (+map a b)
+  (if (or (not a) (not b)
+          (any not a) (any not b))
+      #f (map + a b)))
 
 (define (pitch-from-history-1 history)
-  (let ((history-accel-sum (fold (lambda (a b) (map + a b))
+  (let ((history-accel-sum (fold +map
                                  '(0 0 0) (map cadr history)))
         (l (length history)))
-    (if (zero? l) #f
+    (if (or (zero? l) (not history-accel-sum)) #f
         (accelerometer-pitch
          (map (lambda (h) (/ h l)) history-accel-sum)))))
 
 (define (history-cancel-pitch pitch history)
+;  (print "history-cancel-pitch " pitch history)
   (let ((q (angle-vector->quaternion (deg2rad (if pitch pitch 0)) '(0 1 0))))
     (map (lambda (h)
-           (cons (car h)
-                 (map (lambda (x)
-                        (apply-quaternion-to-vector q x)) (cdr h))))
+           (list (first h) 
+                 (if (any not (second h)) (second h) (apply-quaternion-to-vector q (second h)))
+                 (if (any not (third h)) (third h) (apply-quaternion-to-vector q (third h)))
+                 (fourth h)))
          history)))
 
 (define (roll-from-history-1 history)
-  (let ((history-accel-sum (fold (lambda (a b) (map + a b))
-                                 '(0 0 0) (map cadr history)))
+  (let ((history-accel-sum (fold +map '(0 0 0) (map cadr history)))
         (l (length history)))
-    (if (zero? l) #f
+    (if (or (zero? l) (not history-accel-sum)) #f
         (accelerometer-roll
          (map (lambda (h) (/ h l)) history-accel-sum)))))
 
 (define (heading-from-history-1 history)
   (let ((history-sum
-         (fold (lambda (a b) (list (map + (first a) (first b))
-                                   (map + (second a) (second b))))
-               '((0 0 0) (0 0 0)) (map cdr history)))
+         (fold (lambda (a b) 
+                 (if (or (not a) (not b)
+                         (any not (map (lambda (x) (not (any not x))) a))
+                         (any not (map (lambda (x) (not (any not x))) b)))
+                     #f
+                     (list (map + (first a) (first b))
+                           (map + (second a) (second b)))))
+               '((0 0 0) (0 0 0)) (map (lambda (h) (list (second h) (third h))) history)))
         (l (length history)))
-    (if (zero? l) #f
-    (let ((accel (map (lambda (h) (/ h l)) (first history-sum)))
-          (mag (map (lambda (h) (/ h l)) (second history-sum))))
-      (magnetometer-heading accel mag)))))
+    (if (or (not history-sum) (zero? l) (any not (first history-sum)) (any not (first history-sum))) #f
+        (let ((accel (map (lambda (h) (/ h l)) (first history-sum)))
+              (mag (map (lambda (h) (/ h l)) (second history-sum))))
+          (magnetometer-heading accel mag)))))
 
 (define (heading-from-history-2 history)
   (let ((measurement-history (map cdr history))
         (l (length history)))
-    (if (zero? l) #f
-        (/ (fold + 0 (map magnetometer-heading
-                          (map first measurement-history)
-                          (map second measurement-history))) l))))
+    (let ((accels (map first measurement-history))
+          (mags (map second measurement-history)))
+      (if (or (zero? l)
+              (any (lambda (x) (any not x)) accels)
+              (any (lambda (x) (any not x)) mags))
+          #f
+          (/ (fold + 0 (map magnetometer-heading
+                            accels mags)) l)))))
 
-;(define windvane-control-port #f)
-;(define (set-windvane-control-port! port)
-;  (set! windvane-control-port port))
+(define windvane-control-port #f)
+(define (set-windvane-control-port! port)
+  (set! windvane-control-port port))
+
 
 ; h'' + 2 c w h' + w^2 h = 0
 ;
@@ -202,12 +248,23 @@
             (print "gain " gain " new-gain " new-gain " df " df)
             new-gain))))
 
+; steer to wind algorithm
+(define (calc-windvane-command windvane heading gps-magnetic-heading)
+  (let ((cmd  (+ (* 2 (first windvane))
+                 (* .3 (second windvane)))))
+    (print "cmd = " cmd " = 1*" (first windvane) " +  1*" (second windvane))
+    cmd))
+     
+; Create a map based on wind direction vs heading rate of change
+; vs rudder position
+
+; balanced on both tacks
+; find centerpoint
+;
+; rate of change of 5
+
 ; adaptive autopilot uses gps data as feedback to self-calibrate
 ; 
 ; this autopilot uses pre-calibrated mag and accel data
-; reducing errors in initial condiitons but not limiting modifying bias and scale
-; with time (as this is needed for gyros anyway)
-; redundant sensors are automatically supported as their weights can be calculated
-; in the same feedback loop
 ; 
 

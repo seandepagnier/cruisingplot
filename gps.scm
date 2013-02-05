@@ -51,17 +51,25 @@ extern void libgps_read(struct gps_data_t *data, double results[6]);
                         (lambda () (sensor-field-get 'gps 'heading)))
   
   (computation-register 'gps-time "gps timestamp" '(gps)
-                        (lambda () (sensor-field-get 'gps 'time))))
+                        (lambda () (sensor-field-get 'gps 'time)))
+
+  (sensor-update `(gps 0) '(#f #f #f #f #f #f #f #f)))
 
 
 (define (gps-heading-speed-from-position fix0 fix1)
-  (let ((dt (- (type-field-get 'gps 'time fix1)
-               (type-field-get 'gps 'time fix0))))
-    (let ((lat1 (type-field-get 'gps 'latitude fix1))
-          (lon1 (type-field-get 'gps 'longitude fix1))
-          (lat0 (type-field-get 'gps 'latitude fix0))
-          (lon0 (type-field-get 'gps 'longitude fix0)))
-      0)))
+  (if (or (not fix0) (any not fix0) (not fix1) (any not fix1))
+      '(0 0)
+      (let ((dt (- (type-field-get 'gps 'time fix1)
+                   (type-field-get 'gps 'time fix0)))
+            (R 6367))
+        (let ((lat0 (type-field-get 'gps 'latitude fix0))
+              (lon0 (type-field-get 'gps 'longitude fix0))
+              (lat1 (type-field-get 'gps 'latitude fix1))
+              (lon1 (type-field-get 'gps 'longitude fix1)))
+          (let ((enu1 (* R (- lon1 lon0) (cos (deg2rad lat0))))
+                (enu2 (* R (- lat1 lat0))))
+            (list (rad2deg  (atan enu2 enu1))
+                  (sqrt (+ (square enu1) (square enu2)))))))))
   
   ;; open the gps host, or connect to the gpsd server
 (define (gps-setup host)    
@@ -94,9 +102,10 @@ extern void libgps_read(struct gps_data_t *data, double results[6]);
                                               (map (lambda (result)
                                                      (if (nan? result) #f result))
                                                    (f64vector->list results))))
-                                         (append results
-                                                 (gps-heading-speed-from-position (sensor-query `(gps ,index))
-                                                                                  current-gps))))))))))))))
+                                         (append current-gps
+                                                 (gps-heading-speed-from-position
+                                                  (sensor-query `(gps ,index))
+                                                  current-gps))))))))))))))
 
 (define (parse-gpsd-line line)
   (define (parse-gpsd-report line)
@@ -159,25 +168,33 @@ extern void libgps_read(struct gps_data_t *data, double results[6]);
 
 (define (compute-gps-IGRF)
   (let ((results (make-f64vector 14 0))
-        (date (current-date)))
-    (if (= -1 (geomag70
-               "geomag70/IGRF11.COF"
-               (sensor-field-get 'gps 'latitude)
-               (sensor-field-get 'gps 'longitude)
-               (sensor-field-get 'gps 'altitude)
-               (date-day date) (date-month date) (date-year date)
-               results))
-        (warning "geomag70 failed"))
-    results))
+        (lat (sensor-field-get 'gps 'latitude))
+        (lon (sensor-field-get 'gps 'longitude))
+        (alt  (sensor-field-get 'gps 'altitude))
+;        (date (current-date))
+        )
+    (cond ((and lat lon alt)
+           (if (= -1 (geomag70
+                      "geomag70/IGRF11.COF"
+                      lat lon alt
+;               (date-day date) (date-month date) (date-year date)
+                      3 10 2012
+                   results))
+               (warning "geomag70 failed"))
+           results)
+          (else #f))))
 
 (computation-register 'gps-magnetic-declination "The declination of the magnetic field, calculated from gps position, and date" '(gps)
-                      (lambda () (f64vector-ref (compute-gps-IGRF) 0)))
+                      (lambda () (let ((res (compute-gps-IGRF)))
+                                   (if res (f64vector-ref res 0) #f))))
 
 (computation-register 'gps-magnetic-inclination "The inclination of the magtitude of the field, calculated from gps position, or with no gps, measured from angle of magnetometer and accelerometer"  '(gps)
-                      (lambda () (f64vector-ref (compute-gps-IGRF) 1)))
+                      (lambda () (let ((res (compute-gps-IGRF)))
+                                   (if res (f64vector-ref res 1) #f))))
 
 (computation-register 'gps-magnetic-fieldstrength "The declination of the magnetic field, calculated from gps position, and date" '(gps)
-                      (lambda () (f64vector-ref (compute-gps-IGRF) 6)))
+                      (lambda () (let ((res (compute-gps-IGRF)))
+                                   (if res (f64vector-ref res 6) #f))))
 
 (define gps-plot #f)
 

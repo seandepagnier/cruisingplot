@@ -15,6 +15,6 @@
 
 (define (in->mm x) (* x 25.4))
 
-(define pi (* 2 (asin 1)))
-(define (deg2rad x) (* pi (/ x 180)))
+(define Pi (* 2 (asin 1)))
+(define (deg2rad x) (* Pi (/ x 180)))
 (define (rad2deg x) (* 180 (/ x pi)))

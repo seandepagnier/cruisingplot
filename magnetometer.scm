@@ -11,6 +11,10 @@
 (declare (unit magnetometer))
 (declare (uses sensor leastsquares quaternion))
 
+(use gl glu glut)
+
+(include "glshortcuts.scm")
+
 ; (load "utilities.scm") (load "leastsquares.scm") (load "vector.scm") (load "matrix.scm") (load "algebra.scm")
 
 ;(define accel-mag-3d-calibration #f)
@@ -450,7 +454,7 @@
 
 ; given vectors for accel and mag, determine angle between them
 (define (magnetometer-inclination accel mag)
-  (rad2deg (- (/ pi 2) (phase-resolve (acos (dot (normalize accel)
+  (rad2deg (- (/ Pi 2) (phase-resolve (acos (dot (normalize accel)
                                                  (normalize mag)))))))
 
 ; we know boat moves with a time constant.  try to lock on to this for
@@ -554,3 +558,129 @@
 ;
 ; dip (magnetic declination)
 ; rvx rvy rvz (rotation vector, rotate magnetometer coordinates around this by its magnitude in radians)
+
+(define (refine-measurements measurements measurement)
+  (cond ((any (lambda (m) (equal? m measurement)) measurements)
+         measurements)
+        ((< (length measurements) 64)
+         (cons measurement measurements))
+        (else
+         (let ((dist-map
+             (sort (map
+                    (lambda (m1)
+                      (list
+                       (apply min
+                              (map (lambda (m2)
+                                     (distance m1 m2))
+                                   (let each-m ((measurements measurements))
+                                     (cond ((null? measurements) '())
+                                           ((eq? (car measurements) m1) (each-m (cdr measurements)))
+                                           (else (cons (car measurements) (each-m (cdr measurements))))))))
+                       m1))
+                    measurements)
+                   (lambda (a b) (< (car a) (car b))))))
+;        (print "dist-map " dist-map)
+;        (newline)
+        (cons measurement (cdr (map second dist-map)))))))
+
+(define (magnetometer-test-data1 filename)
+  (with-input-from-file filename
+    (lambda ()
+      (let each-line ((n 0)
+                      (measurements '()))
+        (let ((line (read-line)))
+          (cond ((eof-object? line)
+                 (let ((cal1 (calibrate-biases-and-scale-3d measurements))
+                       (cal2 (calibrate-biases-scale-and-relative-scales-3d measurements))
+                       (cal3 (calibrate-biases-scale-relative-scales-and-cross-coupling-3d measurements)))
+                   (print "measurements " measurements)
+                   (print "cal1 " cal1)
+                   (print "cal2 " cal2)
+                   (print "cal3 " cal3)
+                   (exit 0)))
+                (else
+                 (let-values (((time ax ay az gx gy gz mx my mz temp)
+                               (apply values (string-split line ", "))))
+                   (if (zero? (remainder n 20000))
+                       (print "on line " n))
+                   (each-line (+ n 1)
+                              (if (and (> n 537400) (< n 800000))
+                                  (refine-measurements measurements
+                                                       (list
+                                                        (/ (string->number mx) 512)
+                                                        (/ (string->number my) 512)
+                                                        (/ (string->number mz) 512)))
+                                  measurements))))))))))
+
+(define (cull-bad-measurements measurements cal)
+  (let ((bias-vec (list (first (first cal)) (second (first cal)) (third (first cal)))))
+    (let each-measurement ((measurements measurements))
+    (cond ((null? measurements) '())
+          ((> (abs (- (/ (magnitude (vector- (car measurements) bias-vec))
+                         (fourth (first cal))) 1)) .04)
+           (each-measurement (cdr measurements)))
+          (else (cons (car measurements) (each-measurement (cdr measurements))))))))
+
+(define (magnetometer-test-data filename)
+  (let*((measurements (with-input-from-file filename read))
+        (cal (calibrate-biases-and-scale-3d measurements))
+        (updated-measurements (cull-bad-measurements measurements cal)))
+    (let ((cal1 (calibrate-biases-and-scale-3d updated-measurements))
+          (cal2 (calibrate-biases-scale-and-relative-scales-3d updated-measurements))
+          (cal3 (calibrate-biases-scale-relative-scales-and-cross-coupling-3d updated-measurements)))
+
+      (print "measurements " (length measurements) " updated " (length updated-measurements))
+      (print "cal " cal)
+      (print "cal1 " cal1)
+      (print "cal2 " cal2)
+      (print "cal3 " cal3)
+
+      (glut:InitDisplayMode (+ glut:DOUBLE glut:RGB glut:ALPHA))
+      (glut:CreateWindow "magnetomter plot")
+      (glut:DisplayFunc
+       (let ((ang1 0) (ang2 0))
+         (lambda ()
+           (gl:Clear gl:COLOR_BUFFER_BIT)  
+           (gl:MatrixMode gl:MODELVIEW)
+           (gl:LoadIdentity)
+
+           (RotateAfter ang1 0 1 0)
+           (set! ang1 (+ ang1 1))
+           (RotateAfter ang2 1 0 0)
+           (set! ang2 (+ ang2 .2))
+           
+           (TranslateAfter 0 0 -2)
+           
+           (glColor 1 1 1)
+           (glBegin gl:POINTS
+                    (for-each (lambda (measurement)
+                                (apply glVertex measurement))
+                              updated-measurements))
+
+           (glColor .2 0 1)
+           (let-values (((bx by bz s) (apply values (first cal1))))
+             (gl:Translated bx by bz)
+             (glut:WireSphere s 32 16))
+
+           (glut:SwapBuffers)
+           (thread-sleep! .1)
+           (glut:PostRedisplay))))
+
+    (glut:KeyboardFunc
+     (lambda (key x y)
+       (case key
+         ((#\esc #\q) (exit))
+         ((#\f) (glut:FullScreenToggle)))
+       (glut:PostRedisplay)))
+
+      (glut:ReshapeFunc
+       (lambda (w h)
+         (gl:Viewport 0 0 w h)
+         (gl:MatrixMode gl:PROJECTION)
+         (gl:LoadIdentity)
+         (glu:Perspective 90 (/ w h) .1 100)))
+
+      (glut:IdleFunc (lambda () (thread-sleep! .01) ))
+      (glut:MainLoop)
+
+      (exit 0))))

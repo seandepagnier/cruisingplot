@@ -171,7 +171,7 @@
                 (bias (fourth (first amplitude-frequency-phase-bias-run)))
                 (error (second amplitude-frequency-phase-bias-run)))
             (list (list (abs amplitude) (abs frequency) (if (eor (negative? amplitude) (negative? frequency))
-                                                            (+ pi phase) phase) bias)
+                                                            (+ Pi phase) phase) bias)
                   error))))))
 
 ; find wave from data using least squares
@@ -181,6 +181,7 @@
     (if (< period max-period)
         (each-wave
          (let ((wave (calculate-wave data (/ period))))
+;           (print "calculate-wave " wave " period " period)
            (let ((period (/ (second (first wave)))))
              (if  (and (or (not best-wave)
                            (< (second wave) (second best-wave)))

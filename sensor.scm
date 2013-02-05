@@ -98,6 +98,7 @@
                  (verbose "log file '" filename "' complete")))))))))
 
 (define (make-raw-sensor-computation name index)
+;  (print "make-raw-sensor-computation " name " " index)
   (computation-register (string->symbol (string-append (symbol->string name)
                                                        "."
                                                        (number->string index)))
@@ -191,7 +192,7 @@
 (define (sensor-field-get name-key field)
   (if (sensor-contains? name-key)
       (type-field-get (sensor-name name-key) field
-                      (sensor-query name-key)) 0))
+                      (sensor-query name-key)) #f))
 
 (define (open-serial-device-with-handler device baud handler)
   (call/cc (lambda (bail)
@@ -201,12 +202,15 @@
                            (apply bail (handler _)))
                          (lambda ()
                            (if (not (eq? baud 'none))
-                               (let ((cmd (string-append "stty -F " device " "  (number->string baud)
-                                                         " ignbrk -icrnl -opost -onlcr -isig"
-                                                         " -icanon -iexten -echo -echoe -echok"
-                                                         " -echoctl -echoke min 1 time 5")))
+                               (let ((cmd (string-append "stty -F " device " "  (number->string baud))))
                                  (verbose "executing shell command: " cmd)
                                  (system cmd)))
+                           (let ((cmd (string-append "stty -F " device
+                                                     " ignbrk -icrnl -opost -onlcr -isig"
+                                                     " -icanon -iexten -echo -echoe -echok"
+                                                     " -echoctl -echoke min 1 time 5")))
+                             (verbose "executing shell command: " cmd)
+                             (system cmd))
                            (list (open-input-file device)
                                  (open-output-file device))))))
                    (verbose "Success opening " device)
@@ -273,7 +277,7 @@
                         (let ((sensor-indexes (third sensor)))
                           (if sensor-indexes
                               (for-each (lambda (sensor-index)
-                                          (sensor-update (list sensor
+                                          (sensor-update (list (first sensor)
                                                                sensor-index) #f))
                                         sensor-indexes))))
                         possible-sensors)
@@ -282,6 +286,7 @@
               (let ((words (string-split line)))
                 (if (> (length words) 1)
                     (let ((sensor (find (lambda (sensor)
+;                                          (print "lambda (sensor) " (car sensor) " " (car words))
                                           (equal? (car sensor)
                                                   (string->symbol (remove-last-character (car words)))))
                                         possible-sensors))

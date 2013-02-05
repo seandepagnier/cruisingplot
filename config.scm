@@ -76,6 +76,9 @@
                                    (number->string net-default-port)
                                    " by default")
                     (net-server arg))
+  (args:make-option (t testdata) (required: "FILENAME")
+                    "from test data"
+                    (magnetometer-test-data arg))
   (args:make-option (v verbose) #:none  "Print debugging info, -vv for extra info"
                     (cond ((eq? verbose nice-print)
                            (verbose "Extra Debugging output "

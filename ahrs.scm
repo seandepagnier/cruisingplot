@@ -12,12 +12,13 @@
 
 (define (sensor-9dof-setup device)
   (let ((sensor-names '(accel accel accel
-                        gyroscope gyroscope gyroscope
-                        magnetometer magnetometer magnetometer )))
+                        gyro gyro gyro
+                        mag mag mag)))
     (let ((sensor-indexes (map sensor-new-index sensor-names)))
       (let-values (((i o) (open-serial-device device 38400)))
                                         ; set to output all sensors
-        (task-create
+        (create-task
+         "9 dof reader setup"
          (lambda ()
            (let init ((index 0))
              (cond ((< index 8)
@@ -80,17 +81,58 @@
     (verbose "starting ahrs task " ahrses)
     (set! ahrses (+ ahrses 1))
 
+    (let ((last-time #f)
+          (q (quaternion-identity)))
     (start-periodic-task
-     (options 'period)
-     (let ((filter (case (options 'type)
-                     ((complementary) (make-complementary-filter options)))))
+     "ahrs-debugging-task" 1
+     (lambda ()
+       (print "q " q " pry " (quaternion->pitch-roll-yaw q))
+       ))
+
+    (start-periodic-task
+     "ahrs-computation-task" (options 'period)
        (lambda ()
         (let ((gps-speed (computation-calculate 'gps-speed))
-              (gyros (map computation-calculate  (options 'gyroscopes))))
-          1
-          )))
-     'ahrs-update)))
+              (accels (map computation-calculate  (options 'accels)))
+              (gyros (map computation-calculate  (options 'gyros)))
+              (mags (map computation-calculate  (options 'mags)))
+              (time (elapsed-seconds)))
+          (cond (last-time
+                 (let ((period (- time last-time)))
+                   (set! q (mahoney-algorithm q gyros accels mags .5 period)))))
+          (set! last-time time))))
+        )))
 
+(define (mahoney-algorithm q g a m Kp period)
+  (let ((norm-a (vector-normalize a)))
+    (let-values (((q0 q1 q2 q3) (values q))
+                 ((ax ay az) (values a)))
+      ; half-v is estimated direction of gravity
+    (let*((half-v (list (- (* q1 q3) (* q0 q2))
+                        (+ (* q0 q1) (* q2 q3))
+                        (+ (* q0 q0) (* q3 q3) -.5)))
+      ; half-e is cross product between estimated and measured tilt, which is error
+          (half-e (vector-cross norm-a half-v))
+          (new-g (vector+ (vector-scale (* 2 Kp) half-e) g))
+          (gyro-int (vector-scale (* .5 period) new-g)))
+      (vector-normalize (quaternion* q gyro-int))))))
+
+(define (madgwick-algorithm q g a m beta period)
+  ; quaternion rate of change from gyros
+  (let*((qdot (apply quaternion-rate q g))
+        (norm-a (vector-normalize a)))
+    (let-values (((q0 q1 q2 q3) (values q))
+                 ((ax ay az) (values a)))
+      ; gradient decent algorithm corrective step
+      (let ((s0 (+ (* 4 q0 q2 q2) (*  2 q2 ax) (* 4 q0 q1 q1) (* -2 q1 ay)))
+            (s1 (+ (* 4 q1 q3 q3) (* -2 q3 ax) (* 4 q0 q0 q1) (* -2 q0 ay)
+                   (* -4 q1) (* 8 q1 q1 q1) (* 8 q1 q2 q2) (* 4 q1 az)))
+            (s2 (+ (* 4 q0 q0 q2) (*  2 q0 ax) (* 4 q2 q3 q3) (* -2 q3 ay)
+                   (* -4 q2) (* 8 q2 q1 q1) (* 8 q2 q2 q2) (* 4 q2 az)))
+            (s3 (+ (* 4 q1 q1 q3) (* -2 q1 ax) (* 4 q2 q2 q3) (* -2 q2 ay))))
+        (let*((norm-s (vector-normalize (list s0 s1 s2 s3)))
+              (qdot-update (vector- qdot (vector-scale beta norm-s))))
+          (vector-normalize (vector+ q (vector-scale period qdot-update))))))))
 
 ;;  for over-determined calibration:
 

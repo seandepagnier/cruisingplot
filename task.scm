@@ -105,12 +105,12 @@
                                        (task-set-continuation! task (task-thunk task))
                                        'return))))
                    (let ((run-time (- (timer) task-time)))
-                     (set! current-task #f)
                      (set! total-run-time (+ total-run-time run-time))
                      (cond ((eq? ret 'exit)
                             (verbose "task " (task-info task) " exited")
-                            (set! tasks (cdr tasks))) ; delete this task
+                            (remove! (lambda (t) (eq? t current-task)) tasks)) ; delete this task
                            (else
+                            (set! current-task #f)
                             (cond ((and (> task-time 5) ; dont do this first 5 seconds
                                         (> run-time (/ (task-period task) (length tasks)))
                                         (> (- (timer) (task-sleep-until task))

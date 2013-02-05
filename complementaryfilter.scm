@@ -1,4 +1,4 @@
-;; Copyright (C) 2010 Sean D'Epagnier <sean@depagnier.com>
+;; Copyright (C) 2012 Sean D'Epagnier <sean@depagnier.com>
 ;;
 ;; This Program is free software; you can redistribute it and/or
 ;; modify it under the terms of the GNU General Public
