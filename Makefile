@@ -22,6 +22,9 @@ all: cruisingplot
 cruisingplot: $(OBJECTS)
 	csc -o cruisingplot $(OBJECTS) $(LDFLAGS)
 
-
 clean:
 	rm -f cruisingplot $(OBJECTS)
+
+# need to complete this list
+install-libraries:
+	chicken-install blas

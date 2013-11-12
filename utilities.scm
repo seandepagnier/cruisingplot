@@ -97,7 +97,6 @@
                 (task-sleep 1) ; give tasks time to create computations for the info
                 (computation-info)
                 (exit)))
-
            (let ((values (comp)))
              (cond (values
                     (for-each (lambda (exp value)
@@ -173,7 +172,7 @@
                (string-append (case (inexact->exact (floor (/ n 10)))
                                 ((2) "twenty") ((3) "thirty") ((4) "fourty") ((5) "fifty")
                                 ((6) "sixty") ((7) "seventy") ((8) "eighty") ((9) "ninety")
-                                (error "failed decoding in integer->number" (floor (/ n 10))))
+                                (else (error "failed decoding in integer->number" (floor (/ n 10)))))
                               (integer->name-append (remainder n 10)))))
               ((>= n (caar divs))
                (string-append (integer->name (floor (/ n (caar divs))))

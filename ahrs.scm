@@ -8,7 +8,7 @@
 (declare (unit ahrs))
 (declare (uses sensor options computation infix2prefix))
 
-(use srfi-1 environments)
+(use srfi-1)
 
 (define (sensor-9dof-setup device)
   (let ((sensor-names '(accel accel accel

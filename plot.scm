@@ -269,6 +269,12 @@
 
           )))))
 
+(define glut:FullScreenToggle
+  (let ((fs #t))
+    (lambda ()
+      (set! fs (not fs))
+      (if fs (glut:FullScreen)))))
+
 ; the plot may have multiple instances of various axes, therefore a list
 ; which of lists of axes is used.  Options for the plot for the first element
 ; are first

@@ -22,7 +22,7 @@
                              ; this allows O(1) transposing
 
 (define (vector->matrix n m vector)
-  (list n m vector blas:NoTrans))
+  (list n m vector NoTrans))
 
 (define (vector->square-matrix vector)
   (let ((n (sqrt (f64vector-length vector))))
@@ -54,7 +54,7 @@
 
 (define (matrix-ref m row col)
   (f64vector-ref (matrix-vector m)
-                 (if (eq? blas:NoTrans (matrix-trans m))
+                 (if (eq? NoTrans (matrix-trans m))
                      (+ (* row (matrix-cols m)) col)
                      (+ (* col (matrix-rows m)) row))))
 
@@ -67,19 +67,19 @@
 
 (define (matrix-transpose m)
   (list (matrix-cols m) (matrix-rows m) (matrix-vector m)
-        (if (eq? blas:NoTrans (matrix-trans m))
-            blas:Trans
-            blas:NoTrans)))
+        (if (eq? NoTrans (matrix-trans m))
+            Trans
+            NoTrans)))
 
 (define (matrix+ . matrices)
   (define (matrix+sub a c)
-    (let ((a (if (eq? (matrix-trans c) blas:NoTrans) a (matrix-transpose a))))
+    (let ((a (if (eq? (matrix-trans c) NoTrans) a (matrix-transpose a))))
       (if (not (and (= (matrix-rows a) (matrix-rows c))
                     (= (matrix-cols a) (matrix-cols c))))
           (error "dimension mis-match in matrices supplied to matrix+" a c))
       (let ((b (matrix-identity (matrix-cols a) (matrix-cols a))))
         (vector->matrix-trans (matrix-rows a) (matrix-cols b)
-                                  (blas:dgemm blas:RowMajor (matrix-trans a) blas:NoTrans
+                                  (blas:dgemm blas:RowMajor (matrix-trans a) NoTrans
                                               (matrix-rows a) (matrix-cols b) (matrix-cols a)
                                               1 (matrix-vector a) (matrix-vector b) 1 (matrix-vector c))
                                               (matrix-trans c)))))
@@ -124,7 +124,7 @@
   (= (matrix-rows m) (matrix-cols m)))
 
 (define (matrix-vector-index m row col)
-  (if (eq? blas:NoTrans (matrix-trans m))
+  (if (eq? NoTrans (matrix-trans m))
       (+ (* row (matrix-cols m)) col)
       (+ (* col (matrix-rows m)) row)))
 

@@ -11,7 +11,7 @@
 (declare (unit computation))
 (declare (uses utilities))
 
-(use srfi-1 srfi-69 environments)
+(use srfi-1 srfi-69)
 
 (define computations (make-hash-table))
 
@@ -50,6 +50,7 @@
 
 ; shorthand way of reaching computations
 (define (computation-calculate name)
+;  (print "computation-calculate " name)
   (if (hash-table-exists? computations name)
       (let ((data (hash-table-ref computations name)))
         (if (apply sensor-contains? (second data))
@@ -80,12 +81,16 @@
     (define (evaluate)
       (let ((env (scheme-report-environment 5)))
         (call/cc (lambda (cont)
-                   (for-each (lambda (symbol)
-                               (let ((value (computation-calculate symbol)))
+                   (let ((alist
+                          (map (lambda (symbol)
+                                 (let ((value (computation-calculate symbol)))
                                  (if (not value) (cont #f))
-                                 (environment-extend! env symbol value)))
-                             symbols)
-                   (map (lambda (exp) (eval exp env)) exps)))))
+                                 (list symbol value)))
+                               symbols)))
+                     (map (lambda (exp)
+                                        ;(eval exp env)
+                                        ;(print "exp " exp " time " time)
+                            (eval `(let ,alist ,exp) env)) exps))))))
     (lambda ()
       (call/cc (lambda (bail)
                  (with-exception-handler
@@ -99,7 +104,7 @@
                   evaluate))))))
 
 (define (computation-unique-index name)
-    (if (not (hash-table-exists? computations name))
+  (if (not (hash-table-exists? computations name))
         0
         (let each-index ((index 1))
           (let ((sym (string->symbol (string-append (symbol->string name) "." (number->string index)))))
